@@ -62,6 +62,50 @@ export async function getPatient(tenantId, patientId) {
   return snap?.exists?.() ? { id: snap.id, ...snap.data() } : null
 }
 
+// A little demo history so the Patient history page has a timeline to show
+// offline. Real tenants read from the visits collection below.
+const demoPastVisits = [
+  { id: 'h1', patientId: 'p1', patientName: 'Meena Ramesh', doctor: 'Dr. Priya', createdAt: '2026-05-02T10:15:00Z',
+    complaint: 'Headache, throbbing, left side, 2 days', status: 'completed',
+    consult: { mode: 'quick', dx: 'G43.9 · Migraine', advice: 'Hydration, regular sleep. Avoid known triggers. Review if aura or vomiting.',
+      labs: ['CBC'], labsCustom: '',
+      rx: [{ drug: 'Naproxen 250 mg', dose: '1 tab', freq: 'BD after food', days: 3 },
+        { drug: 'Domperidone 10 mg', dose: '1 tab', freq: 'TDS before food', days: 2 }] } },
+  { id: 'h2', patientId: 'p1', patientName: 'Meena Ramesh', doctor: 'Dr. Priya', createdAt: '2026-02-18T09:40:00Z',
+    complaint: 'Routine thyroid review', status: 'completed',
+    consult: { mode: 'quick', dx: 'E03.9 · Hypothyroidism — stable', advice: 'Continue Thyroxine. Repeat TSH in 3 months.',
+      labs: ['TSH'], labsCustom: '',
+      rx: [{ drug: 'Thyroxine 50 mcg', dose: '1 tab', freq: 'OD empty stomach', days: 90 }] } },
+  { id: 'h3', patientId: 'p3', patientName: 'Ramesh Kumar', doctor: 'Dr. Arun', createdAt: '2026-06-10T18:05:00Z',
+    complaint: 'BP review, occasional giddiness', status: 'completed',
+    consult: { mode: 'quick', dx: 'I10 · Essential hypertension', advice: 'Reduce salt. Home BP monitoring. Continue medication.',
+      labs: ['RFT', 'Electrolytes'], labsCustom: '',
+      rx: [{ drug: 'Amlodipine 5 mg', dose: '1 tab', freq: 'OD', days: 30 }] } },
+]
+
+const visitMillis = (t) => {
+  if (!t) return 0
+  if (typeof t === 'string') return new Date(t).getTime()
+  if (typeof t?.toMillis === 'function') return t.toMillis()
+  if (t?.seconds != null) return t.seconds * 1000
+  return 0
+}
+
+// All visits for one patient, newest first. Filter server-side on patientId,
+// sort client-side (composite-index rule from OHC).
+export async function getPatientVisits(tenantId, patientId) {
+  if (!patientId) return []
+  if (DEMO) {
+    const today = demoQueue.filter((v) => v.patientId === patientId && v.status === 'completed')
+    return [...today, ...demoPastVisits.filter((v) => v.patientId === patientId)]
+      .sort((a, b) => visitMillis(b.createdAt) - visitMillis(a.createdAt))
+  }
+  const q = query(collection(db, 'tenants', tenantId, 'visits'), where('patientId', '==', patientId))
+  const snap = await getDocs(q)
+  const rows = snap?.docs?.map((d) => ({ id: d.id, ...d.data() })) ?? []
+  return rows.sort((a, b) => visitMillis(b.createdAt) - visitMillis(a.createdAt))
+}
+
 export function watchTodayQueue(tenantId, cb) {
   if (DEMO) {
     demoListeners.push(cb)

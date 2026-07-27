@@ -20,3 +20,12 @@ body { @apply bg-paper text-body font-sans text-[14px] antialiased; }
   .th { @apply text-left text-[11.5px] font-medium uppercase tracking-wide text-body-3 px-2.5 py-2 border-b border-line; }
   .td { @apply px-2.5 py-2.5 border-b border-line align-middle; }
 }
+
+/* Print only the receipt or the patient-history sheet, nothing else. */
+@media print {
+  body * { visibility: hidden; }
+  #receipt-print, #receipt-print *,
+  #history-print, #history-print * { visibility: visible; }
+  #receipt-print { position: absolute; left: 0; top: 0; width: 100%; padding: 24px; }
+  .no-print { display: none !important; }
+}
