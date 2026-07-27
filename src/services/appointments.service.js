@@ -59,6 +59,31 @@ export function watchAppointmentsForDay(tenantId, dateISO, cb) {
   })
 }
 
+// Same as watchAppointmentsForDay but over an arbitrary [startISO, endISO) range
+// — powers the week view. One subscription covers the whole week; the day view
+// derives its rows by filtering client-side.
+export function watchAppointmentsRange(tenantId, startISO, endISO, cb) {
+  if (DEMO) {
+    const startMs = new Date(startISO + 'T00:00:00').getTime()
+    const endMs = new Date(endISO + 'T00:00:00').getTime()
+    const listener = () => cb(demoAppts.filter((a) => { const m = toMillis(a.slotStart); return m >= startMs && m < endMs }).map((a) => ({ ...a })))
+    demoListeners.push(listener); listener()
+    return () => { demoListeners = demoListeners.filter((f) => f !== listener) }
+  }
+  const start = new Date(startISO + 'T00:00:00')
+  const end = new Date(endISO + 'T00:00:00')
+  const q = query(
+    collection(db, 'tenants', tenantId, 'appointments'),
+    where('slotStart', '>=', Timestamp.fromDate(start)),
+    where('slotStart', '<', Timestamp.fromDate(end)),
+  )
+  return onSnapshot(q, (snap) => {
+    const rows = snap?.docs?.map((d) => ({ id: d.id, ...d.data() })) ?? []
+    rows.sort((a, b) => toMillis(a.slotStart) - toMillis(b.slotStart))
+    cb(rows)
+  })
+}
+
 export async function bookAppointment(tenantId, { patient, doctor, dateISO, time, reason }) {
   const slotStart = new Date(`${dateISO}T${time}:00`)
   const base = {
