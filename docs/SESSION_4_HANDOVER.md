@@ -44,6 +44,15 @@ confirmed layout, and the flows below actually fired.
 - **Templates page** (`src/pages/Templates.jsx`) — manage per-doctor templates (create,
   edit, delete); "Save as template" from a consult still lands here. New:
   `visits.service.updateTemplate` / `deleteTemplate`.
+- **Appointments page** (`src/pages/Appointments.jsx`) — per-doctor day book: date nav +
+  doctor filter, day schedule with Booked/Arrived/Cancelled, an "open slots" quick-book
+  panel, and a booking modal with family search. **"Arrived" checks the patient into the
+  queue** (calls `patients.service.checkIn` with `visitType: 'appointment'`), so booked
+  patients flow into Front Desk → Consultation like walk-ins. New:
+  `appointments.service.js`. *Verified: booked a new patient at 09:00 (rows 3→4) and marked
+  an appointment arrived → token assigned.* ⚠️ Built in the existing design system because
+  the approved `CLINIQ_prototype.html` is still missing from the repo — restyle to match if
+  that file surfaces.
 
 ### Service / infra changes
 - `billing.service.js` — invoice ledger (`watchInvoices`, `markInvoicePaid`, `updateInvoice`),
@@ -85,13 +94,16 @@ allergy-block and live drug-search have still only been proven in demo mode. Fas
 open the app live → **Superadmin** page → seed a few stock batches and one patient with an
 allergy → run a check-in → consult → Rx once. <10 min.
 
-## Not built (deliberately — no half-wired features)
+## Remaining / next up
 
-- **Appointments page** — still a stub. It's a calendar (day/week per doctor) and the
-  approved design reference `CLINIQ_prototype.html` is **not in the repo** — locate/commit
-  it before building this, so it matches the approved look. This is the main remaining
-  screen.
+- **`CLINIQ_prototype.html` is missing** from the repo (and from Drive). Appointments and
+  future screens were built in the established design system without it. Commit the
+  prototype so the approved look can be cross-checked and any restyle done.
 - **Cloud Function to set staff claims on creation** (needs Blaze) — still S5, unchanged.
+- **Appointments week view + SMS confirmations** — day view is done; week grid and the
+  actual SMS send (needs a gateway) are the natural follow-ons.
+- **Close the live data gap** (below) so the allergy-block and drug-search are proven
+  against real Firestore data, not just demo.
 
 ## Standing rules (unchanged)
 - Verify the signed-in Google account by reading the name/email on the page before any
