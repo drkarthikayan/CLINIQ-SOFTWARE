@@ -4,10 +4,12 @@
 // for the in-memory queue that FrontDesk also renders.
 import { DEMO, db } from '../lib/firebase'
 import {
-  collection, query, getDocs, addDoc, updateDoc, doc,
-  serverTimestamp, increment,
+  collection, query, getDocs, addDoc, updateDoc, deleteDoc, doc,
+  writeBatch, serverTimestamp, increment,
 } from 'firebase/firestore'
 import { _demoUpdateVisit } from './patients.service'
+import { makeInvoicePayload, _demoAddInvoice } from './billing.service'
+import { planDispense, _demoApplyDispense } from './stock.service'
 
 /* ---------------- demo templates ---------------- */
 let demoTemplates = [
@@ -49,6 +51,41 @@ export function completeConsult(tenantId, visitId, consult) {
   })
 }
 
+// Atomic consult completion (Session 4 contract): in ONE writeBatch —
+//   1. mark the visit completed (+ save the doctor's vitals audit entry),
+//   2. queue the unpaid invoice for Billing,
+//   3. FEFO-decrement pharmacy stock for every stocked Rx line.
+// If any part fails the whole thing rolls back, so stock can never drift out
+// of sync with a billed consult. Returns { invoice, dispense }.
+export async function finalizeConsult(tenantId, { visit, consult, vitalsDoctor, editedBy, priceList, stockRows, pharmacyOn = true }) {
+  const invoicePayload = makeInvoicePayload(visit, consult, priceList)
+  const plan = pharmacyOn ? planDispense(stockRows || [], consult.rx || []) : { allocations: [], dispensedLines: [] }
+  const vitalsEntry = { ...(vitalsDoctor || {}), editedBy }
+
+  if (DEMO) {
+    _demoUpdateVisit(visit.id, {
+      consult, vitalsDoctor: { ...vitalsEntry, editedAt: new Date().toISOString() },
+      status: 'completed', completedAt: new Date().toISOString(),
+    })
+    _demoAddInvoice({ id: 'inv-demo-' + visit.id + '-' + Date.now(), ...invoicePayload, createdAt: new Date().toISOString() })
+    _demoApplyDispense(plan.allocations)
+    return { invoice: invoicePayload, dispense: plan }
+  }
+
+  const batch = writeBatch(db)
+  batch.update(doc(db, 'tenants', tenantId, 'visits', visit.id), {
+    consult, vitalsDoctor: { ...vitalsEntry, editedAt: serverTimestamp() },
+    status: 'completed', completedAt: serverTimestamp(),
+  })
+  const invRef = doc(collection(db, 'tenants', tenantId, 'invoices'))
+  batch.set(invRef, { ...invoicePayload, createdAt: serverTimestamp() })
+  for (const a of plan.allocations) {
+    batch.update(doc(db, 'tenants', tenantId, 'pharmacy_stock', a.batchId), { qty: a.newQty })
+  }
+  await batch.commit()
+  return { invoice: { id: invRef.id, ...invoicePayload }, dispense: plan }
+}
+
 /* ---------------- templates ---------------- */
 export async function listTemplates(tenantId) {
   if (DEMO) return [...demoTemplates]
@@ -74,4 +111,20 @@ export async function bumpTemplateUse(tenantId, templateId) {
     return
   }
   await updateDoc(doc(db, 'tenants', tenantId, 'templates', templateId), { useCount: increment(1) })
+}
+
+export async function updateTemplate(tenantId, templateId, patch) {
+  if (DEMO) {
+    demoTemplates = demoTemplates.map((t) => (t.id === templateId ? { ...t, ...patch } : t))
+    return
+  }
+  await updateDoc(doc(db, 'tenants', tenantId, 'templates', templateId), patch)
+}
+
+export async function deleteTemplate(tenantId, templateId) {
+  if (DEMO) {
+    demoTemplates = demoTemplates.filter((t) => t.id !== templateId)
+    return
+  }
+  await deleteDoc(doc(db, 'tenants', tenantId, 'templates', templateId))
 }

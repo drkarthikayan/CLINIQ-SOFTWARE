@@ -66,8 +66,16 @@ tenants/{tenantId}
 - `where()` + `orderBy()` on **different fields** requires a composite index →
   Session-1 convention: filter server-side, **sort client-side**.
 - Always optional-chain snapshots: `snap?.docs ?? []`.
-- Stock receipt + qty decrement must use `writeBatch` (atomic) — Session 4.
+- Stock receipt + qty decrement use `writeBatch` (atomic) — **done in Session 4**
+  via `visits.service.finalizeConsult` (visit status + invoice + FEFO stock
+  decrement commit together, or all roll back).
 - Demo tenant excluded from any future platform stats (OHC platformStats lesson).
+
+## Rules note (Session 4)
+
+`tenants/{tenantId}` now allows **update** by `admin`/`doctor` (create/delete stay
+superadmin-only) so the Settings page can edit clinic name/city and the `modules`
+toggles. Redeploy rules after pulling: `firebase deploy --only firestore:rules`.
 
 ## FEFO dispensing (Session 4 contract)
 

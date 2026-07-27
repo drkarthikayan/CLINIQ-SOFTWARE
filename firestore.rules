@@ -13,7 +13,11 @@ service cloud.firestore {
 
     match /tenants/{tenantId} {
       allow read: if inTenant(tenantId);
-      allow write: if isSuperadmin(); // tenants are created by the seed script / admin SDK, or a superadmin via the Superadmin tool
+      // Create/delete stay superadmin-only (seed script / Superadmin tool).
+      // Admin & doctor may UPDATE their own tenant doc — clinic name/city and
+      // the module toggles edited from the Settings page.
+      allow create, delete: if isSuperadmin();
+      allow update: if hasRole(tenantId, ['admin', 'doctor']) || isSuperadmin();
 
       match /staff/{staffId} {
         allow read: if inTenant(tenantId);

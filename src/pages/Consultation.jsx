@@ -3,11 +3,11 @@ import { useLocation } from 'react-router-dom'
 import { useAuth } from '../store/authStore'
 import { watchTodayQueue, ageFrom, getPatient } from '../services/patients.service'
 import {
-  startConsult, saveConsultDraft, saveDoctorVitals, completeConsult,
+  startConsult, saveConsultDraft, saveDoctorVitals, finalizeConsult,
   listTemplates, saveTemplate, bumpTemplateUse,
 } from '../services/visits.service'
 import { watchStock, searchDrugs, checkAllergyMatch } from '../services/stock.service'
-import { getPriceList, queueInvoiceForConsult } from '../services/billing.service'
+import { getPriceList } from '../services/billing.service'
 import { Chip } from '../components/ui'
 
 const EMPTY_VITALS = { bp: '', pulse: '', temp: '', spo2: '', weight: '' }
@@ -127,11 +127,15 @@ export default function Consultation() {
   const complete = async () => {
     const blocked = consult.rx.find((r) => checkAllergyMatch(allergies, r.drug))
     if (blocked) { toast('⚠ Cannot complete — an Rx line conflicts with a known allergy'); return }
-    await saveDoctorVitals(user.tenantId, visit.id, vitalsDraft, user.name)
-    await completeConsult(user.tenantId, visit.id, consult)
     const priceList = await getPriceList(user.tenantId)
-    await queueInvoiceForConsult(user.tenantId, visit, consult, priceList)
-    toast('Consult completed · billing queued')
+    const { dispense } = await finalizeConsult(user.tenantId, {
+      visit, consult, vitalsDoctor: vitalsDraft, editedBy: user.name,
+      priceList, stockRows: stock, pharmacyOn: true,
+    })
+    const short = (dispense?.dispensedLines || []).filter((l) => l.shortBy > 0)
+    toast(short.length
+      ? `Consult completed · billing queued · ⚠ short stock: ${short.map((s) => s.drug).join(', ')}`
+      : 'Consult completed · billing queued · stock updated')
     setSelectedId(null)
   }
 
