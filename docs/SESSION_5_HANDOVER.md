@@ -24,32 +24,33 @@
 - Platform console → **"Seed starter stock (8)"** one-click populates a realistic GP stock (with near-expiry/low-stock/expired examples), and **"Sample allergy patient"** adds a Penicillin-allergic patient — so the FEFO drug search and the allergy-block can be demonstrated against real data. Manual add-stock and per-batch entry remain.
 - `scripts/seedDemoTenant.mjs` seeds the same stock + 3 patients into `demo-clinic`.
 
-## ⚠️ DEPLOY + ACTIVATION RUNBOOK (Cloud Shell, as nammadoctorji)
+## ⚠️ ACTIVATION (no Admin-SDK scripts needed — S5.3)
 
-Claude cannot run these — no Firebase credentials in the automation environment. Verify the signed-in account on the page first.
+The demo and super-admin accounts now work when created **straight from the
+Firebase console**, because both the client (`SUPERADMIN_EMAIL` / demo email in
+`auth.service.js`) and `firestore.rules` recognise those emails. No service
+account, no gcloud, no seed script.
 
+**Step 1 — deploy (Cloud Shell, as nammadoctorji). Rules deploy is required:**
 ```bash
-cd ~/cliniq && git checkout main && git pull      # after PR is merged
-npm install
-npm run build
-firebase deploy --only hosting
-
-# --- one-time account setup (needs serviceAccount.json in ~/cliniq, gitignored) ---
-# (Generate a key: Firebase console → Project settings → Service accounts → Generate key,
-#  save as serviceAccount.json, and DELETE + revoke it right after, per your standing rule.)
-
-# a) create the platform owner (separate SaaS admin):
-node scripts/setupPlatform.mjs superadmin@cliniq.app 'ChooseAStrongPassword' "Super Admin"
-
-# b) create the public demo clinic + demo@cliniq.app / Demo@1234 + stock + patients:
-node scripts/seedDemoTenant.mjs
-
-# c) (recommended) make the separation clean — strip superadmin from the clinic doctor
-#    so the real clinic account can't reach platform tools:
-node scripts/setSuperadmin.mjs dr.priya@sunriseclinic.in off
+cd ~/cliniq && git checkout main && git pull
+npm install && npm run build
+firebase deploy --only hosting,firestore:rules
 ```
 
-No `firestore.rules` change this session — the platform owner's `superadmin` claim already grants cross-tenant read/write, and create/delete of tenants is superadmin-only (set in Session 4).
+**Step 2 — create the two accounts in the Firebase console** →
+Authentication → Users → **Add user** (twice):
+- `demo@cliniq.app` / `Demo@1234`   (public demo doctor)
+- `superadmin@cliniq.app` / *(a strong password you choose)*   (SaaS owner)
+
+That's it. On first demo login the demo tenant **self-seeds** its pharmacy
+stock + patients (incl. a Penicillin allergy) via `src/services/demo.service.js`.
+
+The old Admin-SDK scripts (`setupPlatform.mjs`, `seedDemoTenant.mjs`) still work
+if you prefer proper custom claims — but they are now optional. For production
+hardening later, you can switch the super admin to a real `superadmin` claim
+(`node scripts/setupPlatform.mjs superadmin@cliniq.app '<pw>' "Super Admin"`) and
+remove the email allowance from `firestore.rules`.
 
 ## After deploy — 2-minute check
 1. **Platform admin tab** → sign in as `superadmin@cliniq.app` → you should see the Platform console (no clinic rail), listing tenants.

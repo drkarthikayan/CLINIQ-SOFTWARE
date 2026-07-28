@@ -14,9 +14,14 @@ import {
   onAuthStateChanged,
 } from 'firebase/auth'
 
-// Public demo clinic account (safe to show on the login screen). Created live
-// by scripts/seedDemoTenant.mjs. Never carries the superadmin claim.
+// Public demo clinic account (safe to show on the login screen). Never carries
+// the superadmin claim.
 export const DEMO_CLINIC = { email: 'demo@cliniq.app', password: 'Demo@1234' }
+// The single super-admin (SaaS owner) email. Recognised by BOTH the client
+// (below) and firestore.rules, so this account works when created straight
+// from the Firebase console — no Admin-SDK claim script required.
+export const SUPERADMIN_EMAIL = 'superadmin@cliniq.app'
+export const DEMO_TENANT = 'demo-clinic'
 
 const CLINIC_DEMO_USER = {
   uid: 'demo-doctor', email: DEMO_CLINIC.email, name: 'Dr. Demo',
@@ -33,7 +38,15 @@ export async function staffLogin(email, password, mode = 'clinic') {
 
   const cred = await signInWithEmailAndPassword(auth, email, password)
   const token = await cred.user.getIdTokenResult(true)
-  const { tenantId, role, superadmin } = token.claims
+  let { tenantId, role, superadmin } = token.claims
+  const emailLc = (cred.user.email || '').toLowerCase()
+
+  // Convenience accounts that can be created straight from the Firebase console
+  // (Authentication → Add user) with NO custom claims. The matching grants live
+  // in firestore.rules (super-admin email allowance + open demo-clinic), so
+  // these still pass security rules. Real clinics keep their proper claims.
+  if (!superadmin && emailLc === SUPERADMIN_EMAIL) superadmin = true
+  if (!tenantId && !superadmin && emailLc === DEMO_CLINIC.email) { tenantId = DEMO_TENANT; role = 'doctor' }
 
   if (!tenantId && !superadmin) {
     await fbSignOut(auth)
