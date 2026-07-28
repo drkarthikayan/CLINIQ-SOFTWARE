@@ -9,7 +9,7 @@ import {
 } from 'firebase/firestore'
 import { _demoUpdateVisit } from './patients.service'
 import { makeInvoicePayload, _demoAddInvoice } from './billing.service'
-import { planDispense, _demoApplyDispense } from './stock.service'
+import { buildDispensaryItems, makeDispensaryPayload, _demoAddDispensary } from './dispensary.service'
 
 /* ---------------- demo templates ---------------- */
 let demoTemplates = [
@@ -51,15 +51,15 @@ export function completeConsult(tenantId, visitId, consult) {
   })
 }
 
-// Atomic consult completion (Session 4 contract): in ONE writeBatch —
+// Atomic consult completion: in ONE writeBatch —
 //   1. mark the visit completed (+ save the doctor's vitals audit entry),
 //   2. queue the unpaid invoice for Billing,
-//   3. FEFO-decrement pharmacy stock for every stocked Rx line.
-// If any part fails the whole thing rolls back, so stock can never drift out
-// of sync with a billed consult. Returns { invoice, dispense }.
-export async function finalizeConsult(tenantId, { visit, consult, vitalsDoctor, editedBy, priceList, stockRows, pharmacyOn = true }) {
+//   3. queue a PENDING dispensary record for the pharmacist (stock is NOT
+//      deducted here — the OHC dispensary flow decrements at dispense time).
+// If any part fails the whole thing rolls back. Returns { invoice, dispensary }.
+export async function finalizeConsult(tenantId, { visit, consult, vitalsDoctor, editedBy, priceList, pharmacyOn = true }) {
   const invoicePayload = makeInvoicePayload(visit, consult, priceList)
-  const plan = pharmacyOn ? planDispense(stockRows || [], consult.rx || []) : { allocations: [], dispensedLines: [] }
+  const dispItems = pharmacyOn ? buildDispensaryItems(consult) : []
   const vitalsEntry = { ...(vitalsDoctor || {}), editedBy }
 
   if (DEMO) {
@@ -68,8 +68,12 @@ export async function finalizeConsult(tenantId, { visit, consult, vitalsDoctor, 
       status: 'completed', completedAt: new Date().toISOString(),
     })
     _demoAddInvoice({ id: 'inv-demo-' + visit.id + '-' + Date.now(), ...invoicePayload, createdAt: new Date().toISOString() })
-    _demoApplyDispense(plan.allocations)
-    return { invoice: invoicePayload, dispense: plan }
+    let dispensary = null
+    if (dispItems.length) {
+      dispensary = { id: 'disp-' + visit.id + '-' + Date.now(), ...makeDispensaryPayload(visit, dispItems), createdAt: new Date().toISOString() }
+      _demoAddDispensary(dispensary)
+    }
+    return { invoice: invoicePayload, dispensary }
   }
 
   const batch = writeBatch(db)
@@ -79,11 +83,13 @@ export async function finalizeConsult(tenantId, { visit, consult, vitalsDoctor, 
   })
   const invRef = doc(collection(db, 'tenants', tenantId, 'invoices'))
   batch.set(invRef, { ...invoicePayload, createdAt: serverTimestamp() })
-  for (const a of plan.allocations) {
-    batch.update(doc(db, 'tenants', tenantId, 'pharmacy_stock', a.batchId), { qty: a.newQty })
+  let dispRef = null
+  if (dispItems.length) {
+    dispRef = doc(collection(db, 'tenants', tenantId, 'dispensary'))
+    batch.set(dispRef, { ...makeDispensaryPayload(visit, dispItems), createdAt: serverTimestamp() })
   }
   await batch.commit()
-  return { invoice: { id: invRef.id, ...invoicePayload }, dispense: plan }
+  return { invoice: { id: invRef.id, ...invoicePayload }, dispensary: dispRef ? { id: dispRef.id } : null }
 }
 
 /* ---------------- templates ---------------- */

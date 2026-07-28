@@ -50,6 +50,14 @@ tenants/{tenantId}
     visitId, patientId, lines: [ { label, amount, source: "pricelist"|"custom"|"pharmacy" } ]
     total, mode ("upi"|"cash"|"card"|"credit"), paidAt
 
+  dispensary/{recordId}            ← OPD→pharmacy handoff (Session 6)
+    visitId, patientId, patientName, doctor
+    items: [ { drug, batchId, qty, dose, freq, days, mrp } ]   ← qty auto = freq×days×dose
+    status: "pending" | "dispensed", dispensedAt, dispensedBy
+  dispensary_log/{logId}           ← one per dispense action
+    visitId, patientName, doctor, dispensedBy, dispensedAt
+    lines: [ { drug, need, dispensed, shortBy, batches: [ { batch, take } ] } ]
+
   pharmacy_stock/{batchId}        ← ONE DOC PER BATCH (FEFO needs batch granularity)
     drug "Paracetamol 650 mg", batch "PB-1042", expiry (Timestamp),
     qty (int), mrp, purchasePrice, importedFrom ("excel"|"manual")

@@ -128,14 +128,13 @@ export default function Consultation() {
     const blocked = consult.rx.find((r) => checkAllergyMatch(allergies, r.drug))
     if (blocked) { toast('⚠ Cannot complete — an Rx line conflicts with a known allergy'); return }
     const priceList = await getPriceList(user.tenantId)
-    const { dispense } = await finalizeConsult(user.tenantId, {
+    const { dispensary } = await finalizeConsult(user.tenantId, {
       visit, consult, vitalsDoctor: vitalsDraft, editedBy: user.name,
-      priceList, stockRows: stock, pharmacyOn: true,
+      priceList, pharmacyOn: true,
     })
-    const short = (dispense?.dispensedLines || []).filter((l) => l.shortBy > 0)
-    toast(short.length
-      ? `Consult completed · billing queued · ⚠ short stock: ${short.map((s) => s.drug).join(', ')}`
-      : 'Consult completed · billing queued · stock updated')
+    toast(dispensary
+      ? 'Consult completed · billing queued · sent to pharmacy'
+      : 'Consult completed · billing queued')
     setSelectedId(null)
   }
 
