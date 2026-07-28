@@ -11,10 +11,10 @@ export default function PlatformShell({ children }) {
       <header className="bg-ink text-white flex items-center justify-between px-6 py-3.5">
         <div className="flex items-center gap-3">
           <span className="font-disp text-[19px] font-semibold">CLINI<span className="text-teal-bright">Q</span></span>
-          <span className="text-[11px] uppercase tracking-widest bg-teal/30 text-teal-bright px-2 py-0.5 rounded">Platform</span>
+          <span className="text-[11px] uppercase tracking-widest bg-teal/30 text-teal-bright px-2 py-0.5 rounded">Super Admin</span>
         </div>
         <div className="flex items-center gap-3 text-[13px]">
-          <span className="text-[#B9C9C7] max-sm:hidden">{user.name} · platform owner</span>
+          <span className="text-[#B9C9C7] max-sm:hidden">{user.name} · super admin</span>
           <button className="text-[#8AA0A0] hover:text-white" onClick={async () => { await signOut(); clear() }}>Sign out</button>
         </div>
       </header>

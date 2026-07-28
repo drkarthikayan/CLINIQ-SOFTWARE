@@ -11,7 +11,7 @@ const FEATURES = [
 
 const MODES = [
   { key: 'clinic', label: 'Clinic staff' },
-  { key: 'platform', label: 'Platform admin' },
+  { key: 'platform', label: 'Super admin' },
 ]
 
 export default function Login() {
@@ -62,7 +62,7 @@ export default function Login() {
         <form className="w-full max-w-[380px]" onSubmit={submit}>
           <h2 className="font-disp text-[22px] font-semibold mb-1">Sign in</h2>
           <p className="text-body-2 text-[13.5px] mb-4">
-            {isPlatform ? 'Platform owner — manage every clinic on CLINIQ.' : 'Your role and clinic come from your account.'}
+            {isPlatform ? 'Super admin — manage every clinic on CLINIQ.' : 'Your role and clinic come from your account.'}
           </p>
 
           {/* Mode toggle */}
@@ -76,8 +76,8 @@ export default function Login() {
           </div>
 
           <div className="mb-3.5">
-            <label className="lbl">{isPlatform ? 'Platform admin email' : 'Email or staff ID'}</label>
-            <input className="inp" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus placeholder={isPlatform ? 'owner@cliniq.app' : 'you@clinic.in'} />
+            <label className="lbl">{isPlatform ? 'Super admin email' : 'Email or staff ID'}</label>
+            <input className="inp" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus placeholder={isPlatform ? 'superadmin@cliniq.app' : 'you@clinic.in'} />
           </div>
           <div className="mb-4">
             <label className="lbl">Password</label>
@@ -85,7 +85,7 @@ export default function Login() {
           </div>
           {err && <p className="text-danger text-[13px] mb-3">{err}</p>}
           <button className="btn-pri w-full !py-[11px] !text-[14px] font-semibold" disabled={busy}>
-            {busy ? 'Signing in…' : isPlatform ? 'Sign in to platform' : 'Sign in'}
+            {busy ? 'Signing in…' : isPlatform ? 'Sign in as super admin' : 'Sign in'}
           </button>
 
           {!isPlatform && (
@@ -98,7 +98,7 @@ export default function Login() {
 
           <p className="text-[12px] text-body-3 mt-3">
             {isPlatform
-              ? 'Platform sign-in is for the CLINIQ owner account only. Clinic staff use the Clinic staff tab.'
+              ? 'Super admin sign-in is for the CLINIQ owner account only. Clinic staff use the Clinic staff tab.'
               : DEMO ? 'Demo mode — any credentials work.' : 'Role decides what you see: doctors get consult + templates, nurses get vitals + queue, front desk gets check-in + billing.'}
           </p>
         </form>

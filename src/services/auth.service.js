@@ -23,8 +23,8 @@ const CLINIC_DEMO_USER = {
   role: 'doctor', tenantId: 'demo-clinic', tenantName: 'Demo Clinic', superadmin: false,
 }
 const PLATFORM_DEMO_USER = {
-  uid: 'demo-platform', email: 'owner@cliniq.app', name: 'Platform Owner',
-  role: 'owner', tenantId: null, tenantName: null, superadmin: true,
+  uid: 'demo-platform', email: 'superadmin@cliniq.app', name: 'Super Admin',
+  role: 'superadmin', tenantId: null, tenantName: null, superadmin: true,
 }
 
 // mode: 'clinic' | 'platform'
@@ -52,7 +52,7 @@ export async function staffLogin(email, password, mode = 'clinic') {
     uid: cred.user.uid,
     email: cred.user.email,
     name: cred.user.displayName || cred.user.email,
-    role: role || (superadmin && !tenantId ? 'owner' : 'frontdesk'),
+    role: role || (superadmin && !tenantId ? 'superadmin' : 'frontdesk'),
     tenantId: tenantId || null,
     superadmin: !!superadmin,
   }
