@@ -1,12 +1,14 @@
-// Billing: the doctor-managed price list, the pure invoice-line builder
-// (shared by consult finalize), and the invoices ledger the Billing page
-// reads. On consult completion an unpaid invoice (paidAt:null) is queued;
-// Billing marks it paid with a payment mode. See docs/FIRESTORE_SCHEMA.md.
+// Billing: the doctor-managed price list, the pure invoice-line builder shared
+// by consult finalize, and the invoices ledger the Billing page reads.
+// A completed consult queues an unpaid invoice; Billing settles it with a
+// discount, an amount received (part payment allowed) and a payment mode.
+// See docs/FIRESTORE_SCHEMA.md.
 import { DEMO, db } from '../lib/firebase'
 import {
   doc, getDoc, setDoc, collection, addDoc, updateDoc,
-  query, onSnapshot, serverTimestamp,
+  query, where, onSnapshot, serverTimestamp, Timestamp,
 } from 'firebase/firestore'
+import { qtyForRx } from './stock.service'
 
 const DEFAULT_PRICE_LIST = [
   { label: 'Consultation', amount: 300 },
@@ -16,6 +18,10 @@ const DEFAULT_PRICE_LIST = [
   { label: 'Dressing — minor', amount: 100 },
   { label: 'Injection administration', amount: 60 },
 ]
+
+// The ledger view is bounded so the Billing page never unboundedly grows;
+// unpaid invoices older than this are still in Firestore, just not listed.
+const LEDGER_WINDOW_DAYS = 30
 
 /* ---------------- price list ---------------- */
 let demoPriceList = [...DEFAULT_PRICE_LIST]
@@ -32,8 +38,6 @@ export async function savePriceList(tenantId, priceList) {
 }
 
 /* ---------------- invoice line builder (pure) ---------------- */
-// Kept side-effect free so the atomic consult-finalize writeBatch and the
-// standalone queue path build identical lines.
 export function buildInvoiceLines(visit, consult, priceList) {
   const list = priceList?.length ? priceList : DEFAULT_PRICE_LIST
   const lines = []
@@ -47,8 +51,12 @@ export function buildInvoiceLines(visit, consult, priceList) {
     if (m) lines.push({ label: m.label, amount: m.amount, source: 'pricelist' })
   })
 
+  // Pharmacy lines are MRP × dispensed quantity (frequency × days), not a
+  // single unit's MRP — billing must match what the patient actually receives.
   ;(consult.rx || []).forEach((r) => {
-    if (r.mrp) lines.push({ label: r.drug, amount: r.mrp, source: 'pharmacy' })
+    if (!r.mrp) return
+    const qty = qtyForRx(r) || 1
+    lines.push({ label: `${r.drug} × ${qty}`, amount: Math.round(r.mrp * qty * 100) / 100, qty, unitMrp: r.mrp, source: 'pharmacy' })
   })
 
   const total = lines.reduce((s, l) => s + (l.amount || 0), 0)
@@ -59,22 +67,34 @@ export function makeInvoicePayload(visit, consult, priceList) {
   const { lines, total } = buildInvoiceLines(visit, consult, priceList)
   return {
     visitId: visit.id, patientId: visit.patientId ?? null, patientName: visit.patientName,
-    lines, total, mode: null, paidAt: null,
+    lines, total, discount: 0, payable: total, paid: 0,
+    mode: null, paidAt: null, status: 'unpaid',
   }
 }
 
+/* ---------------- derived view of an invoice ---------------- */
+// Older invoices predate discount/paid/status, so derive them defensively.
+export function normalizeInvoice(inv) {
+  const total = inv.total ?? 0
+  const discount = inv.discount ?? 0
+  const payable = inv.payable ?? Math.max(0, total - discount)
+  const paid = inv.paid ?? (inv.paidAt ? payable : 0)
+  const status = inv.status ?? (inv.paidAt ? 'paid' : 'unpaid')
+  return { ...inv, total, discount, payable, paid, balance: Math.max(0, payable - paid), status }
+}
+
 /* ---------------- invoices ledger ---------------- */
-const todayISO = () => new Date().toISOString()
+const nowISO = () => new Date().toISOString()
 let demoInvoices = [
   { id: 'inv-seed-1', visitId: 'vh-1', patientId: 'p1', patientName: 'Meena Ramesh',
     lines: [{ label: 'Consultation', amount: 300, source: 'pricelist' }, { label: 'ECG', amount: 250, source: 'pricelist' }],
-    total: 550, mode: 'upi', paidAt: todayISO(), createdAt: todayISO() },
+    total: 550, discount: 50, payable: 500, paid: 500, mode: 'upi', status: 'paid', paidAt: nowISO(), createdAt: nowISO() },
   { id: 'inv-seed-2', visitId: 'vh-2', patientId: null, patientName: 'Suresh K',
     lines: [{ label: 'Consultation', amount: 300, source: 'pricelist' }],
-    total: 300, mode: null, paidAt: null, createdAt: todayISO() },
+    total: 300, discount: 0, payable: 300, paid: 0, mode: null, status: 'unpaid', paidAt: null, createdAt: nowISO() },
 ]
 let demoInvListeners = []
-const emitInvoices = () => demoInvListeners.forEach((cb) => cb([...demoInvoices]))
+const emitInvoices = () => demoInvListeners.forEach((cb) => cb(demoInvoices.map((i) => ({ ...i }))))
 export function _demoAddInvoice(inv) { demoInvoices = [inv, ...demoInvoices]; emitInvoices() }
 
 const millis = (t) => {
@@ -88,10 +108,11 @@ const millis = (t) => {
 export function watchInvoices(tenantId, cb) {
   if (DEMO) {
     demoInvListeners.push(cb)
-    cb([...demoInvoices])
+    cb(demoInvoices.map((i) => ({ ...i })))
     return () => { demoInvListeners = demoInvListeners.filter((f) => f !== cb) }
   }
-  const q = query(collection(db, 'tenants', tenantId, 'invoices'))
+  const since = new Date(); since.setDate(since.getDate() - LEDGER_WINDOW_DAYS); since.setHours(0, 0, 0, 0)
+  const q = query(collection(db, 'tenants', tenantId, 'invoices'), where('createdAt', '>=', Timestamp.fromDate(since)))
   return onSnapshot(q, (snap) => {
     const rows = snap?.docs?.map((d) => ({ id: d.id, ...d.data() })) ?? []
     rows.sort((a, b) => millis(b.createdAt) - millis(a.createdAt))
@@ -100,7 +121,7 @@ export function watchInvoices(tenantId, cb) {
 }
 
 export async function queueInvoiceForConsult(tenantId, visit, consult, priceList) {
-  const payload = { ...makeInvoicePayload(visit, consult, priceList), createdAt: DEMO ? todayISO() : serverTimestamp() }
+  const payload = { ...makeInvoicePayload(visit, consult, priceList), createdAt: DEMO ? nowISO() : serverTimestamp() }
   if (DEMO) {
     const inv = { id: 'inv-demo-' + visit.id + '-' + Date.now(), ...payload }
     _demoAddInvoice(inv)
@@ -110,16 +131,32 @@ export async function queueInvoiceForConsult(tenantId, visit, consult, priceList
   return { id: ref.id, ...payload }
 }
 
-export async function markInvoicePaid(tenantId, invoiceId, mode) {
+/* ---------------- settlement ---------------- */
+// Records a payment against an invoice. `received` may be less than payable —
+// the balance stays open and the invoice shows as partial.
+export async function settleInvoice(tenantId, invoiceId, { mode, received, discount = 0, total, note = '' }) {
+  const payable = Math.max(0, (total ?? 0) - discount)
+  const paid = Math.max(0, received ?? 0)
+  const status = paid >= payable && payable > 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid'
+  const patch = {
+    discount, payable, paid, mode, note, status,
+    paidAt: status === 'paid' ? (DEMO ? nowISO() : serverTimestamp()) : (status === 'partial' ? (DEMO ? nowISO() : serverTimestamp()) : null),
+  }
   if (DEMO) {
-    demoInvoices = demoInvoices.map((i) => (i.id === invoiceId ? { ...i, mode, paidAt: todayISO() } : i))
+    demoInvoices = demoInvoices.map((i) => (i.id === invoiceId ? { ...i, ...patch } : i))
     emitInvoices()
     return
   }
-  await updateDoc(doc(db, 'tenants', tenantId, 'invoices', invoiceId), { mode, paidAt: serverTimestamp() })
+  await updateDoc(doc(db, 'tenants', tenantId, 'invoices', invoiceId), patch)
 }
 
-// Used to attach custom line items before settling. Recomputes total.
+export async function voidInvoice(tenantId, invoiceId, reason) {
+  const patch = { status: 'void', voidReason: reason || '', voidedAt: DEMO ? nowISO() : serverTimestamp() }
+  if (DEMO) { demoInvoices = demoInvoices.map((i) => (i.id === invoiceId ? { ...i, ...patch } : i)); emitInvoices(); return }
+  await updateDoc(doc(db, 'tenants', tenantId, 'invoices', invoiceId), patch)
+}
+
+// Used to attach or remove line items before settling. Recomputes the total.
 export async function updateInvoice(tenantId, invoiceId, patch) {
   const withTotal = patch.lines
     ? { ...patch, total: patch.lines.reduce((s, l) => s + (l.amount || 0), 0) }
@@ -131,3 +168,5 @@ export async function updateInvoice(tenantId, invoiceId, patch) {
   }
   await updateDoc(doc(db, 'tenants', tenantId, 'invoices', invoiceId), withTotal)
 }
+
+export { LEDGER_WINDOW_DAYS }
