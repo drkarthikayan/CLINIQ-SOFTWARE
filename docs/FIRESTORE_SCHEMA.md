@@ -59,8 +59,13 @@ tenants/{tenantId}
     lines: [ { drug, need, dispensed, shortBy, batches: [ { batch, take } ] } ]
 
   pharmacy_stock/{batchId}        ← ONE DOC PER BATCH (FEFO needs batch granularity)
-    drug "Paracetamol 650 mg", batch "PB-1042", expiry (Timestamp),
-    qty (int), mrp, purchasePrice, importedFrom ("excel"|"manual")
+    drug "Paracetamol 650 mg", batch "PB-1042", expiry (ISO string),
+    qty (int), mrp, minStock (per-drug low-stock alert), purchasePrice,
+    importedFrom ("excel"|"manual"|"starter")
+
+  waste_register/{wasteId}        ← Biomedical Waste (BMW) register, Session 8
+    category (Yellow|Red|White|Blue ...), item, qty, unit,
+    disposal, handledBy, createdAt
 
   templates/{templateId}
     name, mode, complaint, dx, advice, rx[], labs[], ownerUid?, useCount
