@@ -1,10 +1,11 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './store/authStore'
 import AppShell from './components/AppShell'
 import PlatformShell from './components/PlatformShell'
 import Login from './pages/Login'
 import FrontDesk from './pages/FrontDesk'
+import { ensureDemoData } from './services/demo.service'
 
 const Appointments = lazy(() => import('./pages/Appointments'))
 const Consultation = lazy(() => import('./pages/Consultation'))
@@ -21,6 +22,12 @@ const Spin = () => (
 
 export default function App() {
   const user = useAuth((s) => s.user)
+
+  // The public demo tenant seeds its own data on first sign-in.
+  useEffect(() => {
+    if (user?.tenantId === 'demo-clinic') ensureDemoData('demo-clinic')
+  }, [user?.tenantId])
+
   if (!user) return <Login />
 
   // Platform owner (superadmin, no tenant) → cross-tenant console, no clinic rail.

@@ -3,12 +3,29 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() { return request.auth != null; }
-    function isSuperadmin() { return signedIn() && request.auth.token.superadmin == true; }
+    // Super admin = the superadmin custom claim OR the single owner email, so
+    // the owner account works even when created straight from the Firebase
+    // console (no Admin-SDK claim script). Keep this email in sync with
+    // SUPERADMIN_EMAIL in src/services/auth.service.js.
+    function isSuperadmin() {
+      return signedIn() && (request.auth.token.superadmin == true
+        || request.auth.token.email == 'superadmin@cliniq.app');
+    }
     function inTenant(tenantId) {
       return signedIn() && (request.auth.token.tenantId == tenantId || isSuperadmin());
     }
     function hasRole(tenantId, roles) {
       return inTenant(tenantId) && request.auth.token.role in roles;
+    }
+
+    // Public demo tenant: any signed-in user can read/write it (throwaway demo
+    // data), so the demo account works with no custom claims. Union with the
+    // generic /tenants rules below — access is granted if either allows.
+    match /tenants/demo-clinic {
+      allow read, write: if signedIn();
+    }
+    match /tenants/demo-clinic/{path=**} {
+      allow read, write: if signedIn();
     }
 
     match /tenants/{tenantId} {
