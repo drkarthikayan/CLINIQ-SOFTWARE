@@ -112,6 +112,14 @@ export default function Pharmacy() {
     } finally { setBusy(false) }
   }
 
+  // Restock hint: if the drug being added already exists, surface its batches.
+  const existingForForm = useMemo(() => {
+    const name = form.drug.trim().toLowerCase()
+    if (!name) return null
+    const b = stock.filter((r) => r.drug?.trim().toLowerCase() === name)
+    return b.length ? { batches: b.length, total: b.reduce((s, r) => s + (r.qty ?? 0), 0) } : null
+  }, [form.drug, stock])
+
   const expiredBatches = useMemo(() => stock.filter((r) => (r.qty ?? 0) > 0 && isExpired(r.expiry)), [stock])
   const logWaste = async () => {
     if (!wasteForm.item.trim() || !wasteForm.qty) { toast('Enter an item and quantity'); return }
@@ -329,7 +337,8 @@ export default function Pharmacy() {
         </>}>
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div className="col-span-2"><label className="lbl">Drug (with strength)</label>
-            <input className="inp" placeholder="Paracetamol 650 mg" value={form.drug} onChange={(e) => setForm((f) => ({ ...f, drug: e.target.value }))} /></div>
+            <input className="inp" placeholder="Paracetamol 650 mg" value={form.drug} onChange={(e) => setForm((f) => ({ ...f, drug: e.target.value }))} />
+            {existingForForm && <p className="text-[12px] text-teal-dark mt-1">↻ Restock — already stocked: {existingForForm.batches} batch{existingForForm.batches === 1 ? '' : 'es'}, {existingForForm.total} in stock. This adds a new batch.</p>}</div>
           <div><label className="lbl">Batch no.</label><input className="inp font-mono" value={form.batch} onChange={(e) => setForm((f) => ({ ...f, batch: e.target.value }))} /></div>
           <div><label className="lbl">Expiry</label><input className="inp font-mono" type="date" value={form.expiry} onChange={(e) => setForm((f) => ({ ...f, expiry: e.target.value }))} /></div>
           <div><label className="lbl">Quantity</label><input className="inp font-mono" type="number" value={form.qty} onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))} /></div>
