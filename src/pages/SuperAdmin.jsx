@@ -3,15 +3,16 @@ import { useAuth } from '../store/authStore'
 import { Chip, Stat } from '../components/ui'
 import {
   listTenants, createTenant, updateTenantMeta, seedStockItem, seedPatient, savePriceList,
-  PLANS, PLAN_PRICE,
+  PLANS,
 } from '../services/admin.service'
 import { getPriceList } from '../services/billing.service'
+import { getPlatformConfig, savePlatformPlans, listPlatformInvoices, createPlatformInvoice, currentPeriod } from '../services/platform.service'
 
 const EMPTY_STOCK = { drug: '', batch: '', expiry: '', qty: '', mrp: '' }
 const EMPTY_PATIENT = { name: '', mobile: '', dob: '', sex: 'F', relation: 'Self', allergies: '', conditions: '' }
 const EMPTY_STAFF = { email: '', password: '', name: '', role: 'doctor' }
 const ROLES = ['admin', 'doctor', 'nurse', 'frontdesk']
-const TABS = [['overview', 'Overview'], ['clinics', 'Clinics'], ['provision', 'Provision']]
+const TABS = [['overview', 'Overview'], ['clinics', 'Clinics'], ['billing', 'Plans & billing'], ['provision', 'Provision']]
 const rupee = (n) => '₹' + (n ?? 0).toLocaleString('en-IN')
 const dateStr = (t) => {
   const ms = typeof t === 'string' ? new Date(t).getTime() : typeof t?.toMillis === 'function' ? t.toMillis() : t?.seconds != null ? t.seconds * 1000 : 0
@@ -43,22 +44,36 @@ export default function SuperAdmin() {
   const [staff, setStaff] = useState(EMPTY_STAFF)
   const [priceList, setPriceList] = useState([])
   const [newPrice, setNewPrice] = useState({ label: '', amount: '' })
+  const [plans, setPlans] = useState([])
+  const [invoices, setInvoices] = useState([])
   const [toastMsg, setToastMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const toast = (m) => { setToastMsg(m); setTimeout(() => setToastMsg(''), 3600) }
 
   const refreshTenants = async () => { const rows = await listTenants(); setTenants(rows); return rows }
+  const refreshInvoices = async () => setInvoices(await listPlatformInvoices())
   useEffect(() => { if (user.superadmin) refreshTenants().then((rows) => { if (rows.length) setTenantId((id) => id || rows[0].id) }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (user.superadmin) { getPlatformConfig().then((c) => setPlans(c.plans)); refreshInvoices() } }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tenantId) getPriceList(tenantId).then(setPriceList); else setPriceList([]) }, [tenantId])
 
+  const priceOf = (planKey) => plans.find((p) => p.key === planKey)?.price ?? 0
   const stats = useMemo(() => {
     const active = tenants.filter((t) => (t.status || 'active') === 'active').length
     const trial = tenants.filter((t) => t.plan === 'trial').length
     const suspended = tenants.filter((t) => t.status === 'suspended').length
-    const mrr = tenants.filter((t) => (t.status || 'active') === 'active' && !t.isDemo).reduce((s, t) => s + (PLAN_PRICE[t.plan] || 0), 0)
+    const mrr = tenants.filter((t) => (t.status || 'active') === 'active' && !t.isDemo).reduce((s, t) => s + priceOf(t.plan), 0)
     const byPlan = PLANS.map((p) => ({ plan: p, count: tenants.filter((t) => t.plan === p).length }))
     return { total: tenants.length, active, trial, suspended, mrr, byPlan }
-  }, [tenants])
+  }, [tenants, plans]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const editPlanPrice = (key, price) => setPlans((ps) => ps.map((p) => (p.key === key ? { ...p, price: Number(price) || 0 } : p)))
+  const savePlans = async () => { await savePlatformPlans(plans); toast('Plans saved') }
+  const genInvoice = async (t) => {
+    const amount = priceOf(t.plan)
+    await createPlatformInvoice({ tenantId: t.id, tenantName: t.name || t.id, plan: t.plan, amount, period: currentPeriod() })
+    await refreshInvoices()
+    toast(`Invoice raised: ${t.name || t.id} · ${currentPeriod()} · ₹${amount.toLocaleString('en-IN')}`)
+  }
   const recent = useMemo(() => [...tenants].sort((a, b) => (dateStr(b.createdAt) > dateStr(a.createdAt) ? 1 : -1)).slice(0, 5), [tenants])
 
   if (!user.superadmin) {
@@ -128,7 +143,7 @@ export default function SuperAdmin() {
                   <span className="font-mono text-[12.5px] w-6 text-right">{count}</span>
                 </div>
               ))}
-              <p className="text-[11.5px] text-body-3 mt-2">Plan pricing: {PLANS.map((p) => `${p} ${rupee(PLAN_PRICE[p])}`).join(' · ')} /mo</p>
+              <p className="text-[11.5px] text-body-3 mt-2">Plan pricing: {plans.map((p) => `${p.key} ${rupee(p.price)}`).join(' · ')} /mo</p>
             </div>
             <div className="card p-4">
               <b className="font-disp block mb-3">Recent clinics</b>
@@ -178,6 +193,68 @@ export default function SuperAdmin() {
             </form>
           </div>
         </>
+      )}
+
+      {tab === 'billing' && (
+        <div className="grid gap-4">
+          <div className="card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <b className="font-disp">Plans & pricing</b>
+              <button className="btn-pri !py-1.5 !text-[12.5px]" onClick={savePlans}>Save plans</button>
+            </div>
+            <table className="w-full text-[13px] border-collapse">
+              <thead><tr><th className="th">Plan</th><th className="th w-40">Price ₹ / month</th><th className="th w-28">Trial days</th><th className="th w-24 text-right">Clinics</th></tr></thead>
+              <tbody>
+                {plans.map((p) => (
+                  <tr key={p.key} className="border-b border-line">
+                    <td className="td capitalize"><b>{p.name || p.key}</b></td>
+                    <td className="td"><input className="inp !py-1 font-mono w-28" type="number" value={p.price} onChange={(e) => editPlanPrice(p.key, e.target.value)} /></td>
+                    <td className="td font-mono text-body-2">{p.trialDays || 0}</td>
+                    <td className="td text-right font-mono">{tenants.filter((t) => t.plan === p.key).length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-[12px] text-body-3 mt-2">Current MRR from active paid clinics: <b className="font-mono">{rupee(stats.mrr)}</b></p>
+          </div>
+
+          <div className="card overflow-hidden">
+            <div className="flex justify-between items-center px-4 py-3.5 border-b border-line"><b className="font-disp">Billing by clinic</b><span className="text-[12px] text-body-3">{currentPeriod()}</span></div>
+            <table className="w-full text-[13px] border-collapse">
+              <thead><tr><th className="th">Clinic</th><th className="th w-28">Plan</th><th className="th w-28 text-right">Amount</th><th className="th w-28">Status</th><th className="th w-36"></th></tr></thead>
+              <tbody>
+                {tenants.map((t) => (
+                  <tr key={t.id} className="hover:bg-[#FBFAF7]">
+                    <td className="td"><b>{t.name}</b>{t.isDemo && <Chip tone="teal" className="ml-1.5">demo</Chip>}</td>
+                    <td className="td"><Chip tone="gray">{t.plan}</Chip></td>
+                    <td className="td text-right font-mono">{rupee(priceOf(t.plan))}</td>
+                    <td className="td"><Chip tone={statusTone(t.status)}>{t.status || 'active'}</Chip></td>
+                    <td className="td"><button className="btn !py-1 !text-[12px]" disabled={t.isDemo || priceOf(t.plan) === 0} onClick={() => genInvoice(t)}>Generate invoice</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="card overflow-hidden">
+            <div className="flex justify-between items-center px-4 py-3.5 border-b border-line"><b className="font-disp">Recent invoices</b><span className="text-[12px] text-body-3">{invoices.length}</span></div>
+            <table className="w-full text-[13px] border-collapse">
+              <thead><tr><th className="th">Clinic</th><th className="th w-28">Period</th><th className="th w-28">Plan</th><th className="th w-28 text-right">Amount</th><th className="th w-24">Status</th></tr></thead>
+              <tbody>
+                {invoices.map((inv) => (
+                  <tr key={inv.id}>
+                    <td className="td">{inv.tenantName}</td>
+                    <td className="td font-mono text-body-2">{inv.period}</td>
+                    <td className="td">{inv.plan}</td>
+                    <td className="td text-right font-mono">{rupee(inv.amount)}</td>
+                    <td className="td"><Chip tone="green">{inv.status}</Chip></td>
+                  </tr>
+                ))}
+                {invoices.length === 0 && <tr><td className="td text-body-3" colSpan={5}>No invoices raised yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
       {tab === 'provision' && (

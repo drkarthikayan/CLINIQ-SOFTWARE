@@ -28,6 +28,15 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
+    // Platform-level (SaaS) config + billing — superadmin only.
+    match /platform/{docId} {
+      allow read: if signedIn();
+      allow write: if isSuperadmin();
+    }
+    match /platform_invoices/{invoiceId} {
+      allow read, write: if isSuperadmin();
+    }
+
     match /tenants/{tenantId} {
       allow read: if inTenant(tenantId);
       // Create/delete stay superadmin-only (seed script / Superadmin tool).
