@@ -39,7 +39,7 @@ firebase deploy --only hosting
 #  save as serviceAccount.json, and DELETE + revoke it right after, per your standing rule.)
 
 # a) create the platform owner (separate SaaS admin):
-node scripts/setupPlatform.mjs owner@cliniq.app 'ChooseAStrongPassword' "Platform Owner"
+node scripts/setupPlatform.mjs superadmin@cliniq.app 'ChooseAStrongPassword' "Super Admin"
 
 # b) create the public demo clinic + demo@cliniq.app / Demo@1234 + stock + patients:
 node scripts/seedDemoTenant.mjs
@@ -52,14 +52,14 @@ node scripts/setSuperadmin.mjs dr.priya@sunriseclinic.in off
 No `firestore.rules` change this session — the platform owner's `superadmin` claim already grants cross-tenant read/write, and create/delete of tenants is superadmin-only (set in Session 4).
 
 ## After deploy — 2-minute check
-1. **Platform admin tab** → sign in as `owner@cliniq.app` → you should see the Platform console (no clinic rail), listing tenants.
+1. **Platform admin tab** → sign in as `superadmin@cliniq.app` → you should see the Platform console (no clinic rail), listing tenants.
 2. Pick a tenant → **Seed starter stock** → open that clinic and confirm stock in Pharmacy.
 3. **Clinic staff tab** → **Try the demo** → `demo@cliniq.app` → clinic app with stock + the allergic patient; prescribe Amoxicillin to Aarti Sharma to see the allergy block fire (closes the long-standing live-data gap).
 
 ## Login reference (after activation)
 | Access | Tab | Email | Password |
 |---|---|---|---|
-| Platform owner (all clinics) | Platform admin | `owner@cliniq.app` | *(you set it)* |
+| Platform owner (all clinics) | Platform admin | `superadmin@cliniq.app` | *(you set it)* |
 | Public demo clinic | Clinic staff | `demo@cliniq.app` | `Demo@1234` |
 | Real clinic (Sunrise) | Clinic staff | `dr.priya@sunriseclinic.in` | `ChangeMe#2026` (change it) |
 
