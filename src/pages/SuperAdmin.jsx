@@ -8,6 +8,24 @@ const EMPTY_PATIENT = { name: '', mobile: '', dob: '', sex: 'F', relation: 'Self
 const EMPTY_STAFF = { email: '', password: '', name: '', role: 'doctor' }
 const ROLES = ['admin', 'doctor', 'nurse', 'frontdesk']
 
+// A realistic GP starter stock, one click to populate a fresh clinic. Expiries
+// are relative to today so the near-expiry (≤90d) / low-stock flags show up.
+const plusDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10) }
+const STARTER_STOCK = [
+  { drug: 'Paracetamol 650 mg', batch: 'PB-1042', expiry: plusDays(400), qty: 120, mrp: 2, purchasePrice: 1.1 },
+  { drug: 'Paracetamol 650 mg', batch: 'PB-1039', expiry: plusDays(50), qty: 8, mrp: 2, purchasePrice: 1.1 },
+  { drug: 'Amoxicillin 500 mg', batch: 'AM-556', expiry: plusDays(20), qty: 40, mrp: 6, purchasePrice: 3.4 },
+  { drug: 'Azithromycin 500 mg', batch: 'AZ-118', expiry: plusDays(120), qty: 15, mrp: 12, purchasePrice: 7 },
+  { drug: 'Cetirizine 10 mg', batch: 'CT-221', expiry: plusDays(300), qty: 60, mrp: 1.5, purchasePrice: 0.6 },
+  { drug: 'Pantoprazole 40 mg', batch: 'PT-330', expiry: plusDays(500), qty: 90, mrp: 3, purchasePrice: 1.5 },
+  { drug: 'ORS sachet', batch: 'ORS-77', expiry: plusDays(200), qty: 200, mrp: 20, purchasePrice: 11 },
+  { drug: 'Ibuprofen 400 mg', batch: 'IB-902', expiry: plusDays(-10), qty: 4, mrp: 3, purchasePrice: 1.2 },
+]
+const SAMPLE_ALLERGY_PATIENT = {
+  name: 'Aarti Sharma', mobile: '9800000001', dob: '1990-06-15', sex: 'F', relation: 'Self',
+  allergies: 'Penicillin (rash, 2021)', conditions: 'Hypothyroidism (2022)',
+}
+
 export default function SuperAdmin() {
   const user = useAuth((s) => s.user)
 
@@ -22,6 +40,7 @@ export default function SuperAdmin() {
   const [newPrice, setNewPrice] = useState({ label: '', amount: '' })
 
   const [toastMsg, setToastMsg] = useState('')
+  const [busy, setBusy] = useState(false)
   const toast = (m) => { setToastMsg(m); setTimeout(() => setToastMsg(''), 3600) }
 
   const refreshTenants = async () => {
@@ -87,6 +106,27 @@ export default function SuperAdmin() {
     toast(`Added patient: ${patientName}`)
   }
 
+  const seedStarterStock = async () => {
+    if (!tenantId || busy) return
+    setBusy(true)
+    try {
+      for (const item of STARTER_STOCK) await seedStockItem(tenantId, { ...item, importedFrom: 'starter' })
+      toast(`Seeded ${STARTER_STOCK.length} starter stock batches into ${tenantId}`)
+    } finally { setBusy(false) }
+  }
+  const seedAllergyPatient = async () => {
+    if (!tenantId || busy) return
+    setBusy(true)
+    try {
+      await seedPatient(tenantId, {
+        ...SAMPLE_ALLERGY_PATIENT,
+        allergies: SAMPLE_ALLERGY_PATIENT.allergies.split(',').map((s) => s.trim()).filter(Boolean),
+        conditions: SAMPLE_ALLERGY_PATIENT.conditions.split(',').map((s) => s.trim()).filter(Boolean),
+      })
+      toast(`Seeded sample patient ${SAMPLE_ALLERGY_PATIENT.name} (Penicillin allergy)`)
+    } finally { setBusy(false) }
+  }
+
   const addPrice = () => {
     if (!newPrice.label || !newPrice.amount) return
     setPriceList((p) => [...p, { label: newPrice.label, amount: Number(newPrice.amount) }])
@@ -135,7 +175,13 @@ export default function SuperAdmin() {
       {tenantId && (
         <>
           <div className="card p-4 mb-4">
-            <b className="font-disp block mb-3">Seed pharmacy stock</b>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <b className="font-disp">Seed pharmacy stock</b>
+              <div className="flex gap-2">
+                <button className="btn" type="button" disabled={busy} onClick={seedStarterStock}>⬡ Seed starter stock ({STARTER_STOCK.length})</button>
+                <button className="btn" type="button" disabled={busy} onClick={seedAllergyPatient}>+ Sample allergy patient</button>
+              </div>
+            </div>
             <form onSubmit={addStock} className="grid grid-cols-2 md:grid-cols-5 gap-2.5 items-end">
               <div><span className="lbl">Drug</span><input className="inp" placeholder="Paracetamol 650 mg" value={stock.drug} onChange={(e) => setStock((s) => ({ ...s, drug: e.target.value }))} /></div>
               <div><span className="lbl">Batch</span><input className="inp" placeholder="PB-1042" value={stock.batch} onChange={(e) => setStock((s) => ({ ...s, batch: e.target.value }))} /></div>
