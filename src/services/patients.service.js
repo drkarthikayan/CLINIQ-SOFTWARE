@@ -2,7 +2,7 @@
 // + name + dob. Age is DISPLAYED, never stored as identity (it changes yearly).
 import { DEMO, db } from '../lib/firebase'
 import {
-  collection, query, where, getDocs, addDoc, onSnapshot,
+  collection, query, where, getDocs, addDoc, updateDoc, onSnapshot,
   serverTimestamp, Timestamp, doc, getDoc,
 } from 'firebase/firestore'
 
@@ -29,14 +29,14 @@ const demoPatients = [
     conditions: ['T2DM', 'HTN'] },
 ]
 let demoQueue = [
-  { id: 'v1', token: 'T-21', patientId: 'p1', patientName: 'Meena Ramesh', dob: '1992-03-12', age: 34, sex: 'F',
+  { id: 'v1', token: 'T-21', tokenNum: 21, patientId: 'p1', patientName: 'Meena Ramesh', dob: '1992-03-12', age: 34, sex: 'F',
     doctor: 'Dr. Priya', status: 'in_consult', vitals: { bp: '118/76', pulse: 92, temp: 101.2, spo2: 98 },
     allergyFlag: 'Penicillin' },
-  { id: 'v2', token: 'T-22', patientId: null, patientName: 'Suresh K', dob: null, age: 58, sex: 'M',
+  { id: 'v2', token: 'T-22', tokenNum: 22, patientId: null, patientName: 'Suresh K', dob: null, age: 58, sex: 'M',
     doctor: 'Dr. Priya', status: 'vitals', vitals: null, allergyFlag: null },
-  { id: 'v3', token: 'T-23', patientId: 'p2', patientName: 'Ayaan Ramesh', dob: '2020-01-05', age: 6, sex: 'M',
+  { id: 'v3', token: 'T-23', tokenNum: 23, patientId: 'p2', patientName: 'Ayaan Ramesh', dob: '2020-01-05', age: 6, sex: 'M',
     doctor: 'Dr. Arun', status: 'waiting', vitals: null, allergyFlag: null },
-  { id: 'v4', token: 'T-24', patientId: null, patientName: 'Lakshmi V', dob: null, age: 71, sex: 'F',
+  { id: 'v4', token: 'T-24', tokenNum: 24, patientId: null, patientName: 'Lakshmi V', dob: null, age: 71, sex: 'F',
     doctor: 'Dr. Priya', status: 'waiting', vitals: null, allergyFlag: null },
 ]
 let demoListeners = []
@@ -134,6 +134,37 @@ export function _demoUpdateVisit(visitId, patch) {
   demoEmit()
 }
 
+// Nurse vitals recorded from the front desk AFTER check-in. Writes the nurse
+// entry (never the doctor's `vitalsDoctor` audit field) and moves a waiting
+// visit to `vitals`.
+export async function recordNurseVitals(tenantId, visitId, vitals, recordedBy) {
+  const entry = { ...vitals, recordedBy, recordedAt: DEMO ? new Date().toISOString() : serverTimestamp() }
+  if (DEMO) {
+    demoQueue = demoQueue.map((v) => (v.id === visitId
+      ? { ...v, vitals: entry, status: v.status === 'waiting' ? 'vitals' : v.status }
+      : v))
+    demoEmit()
+    return
+  }
+  const ref = doc(db, 'tenants', tenantId, 'visits', visitId)
+  const snap = await getDoc(ref)
+  const status = snap?.data()?.status
+  await updateDoc(ref, { vitals: entry, ...(status === 'waiting' ? { status: 'vitals' } : {}) })
+}
+
+// Human queue tokens (T-1, T-2 …) restart each day. Derived from the max
+// tokenNum among today's visits — visits are readable by every clinic role,
+// unlike a settings counter doc, and a single front desk won't race.
+async function nextTokenNum(tenantId) {
+  const start = new Date(); start.setHours(0, 0, 0, 0)
+  const snap = await getDocs(query(
+    collection(db, 'tenants', tenantId, 'visits'),
+    where('createdAt', '>=', Timestamp.fromDate(start)),
+  ))
+  const max = (snap?.docs ?? []).reduce((m, d) => Math.max(m, d.data()?.tokenNum ?? 0), 0)
+  return max + 1
+}
+
 export async function checkIn(tenantId, { patient, doctor, visitType, complaint, vitals }) {
   if (DEMO) {
     let patientId = patient.id
@@ -147,7 +178,7 @@ export async function checkIn(tenantId, { patient, doctor, visitType, complaint,
     }
     const n = 21 + demoQueue.length
     demoQueue = [...demoQueue, {
-      id: 'v' + (demoQueue.length + 1), token: 'T-' + n, patientId,
+      id: 'v' + (demoQueue.length + 1), token: 'T-' + n, tokenNum: n, patientId,
       patientName: patient.name, dob: patient.dob, age: ageFrom(patient.dob), sex: patient.sex,
       doctor, visitType: visitType || 'walk_in', complaint: complaint || '',
       status: vitals?.bp ? 'vitals' : 'waiting', vitals: vitals?.bp ? vitals : null,
@@ -168,14 +199,17 @@ export async function checkIn(tenantId, { patient, doctor, visitType, complaint,
     })
     patientId = pRef.id
   }
-  const ref = await addDoc(collection(db, 'tenants', tenantId, 'visits'), {
+  const tokenNum = await nextTokenNum(tenantId)
+  const token = 'T-' + tokenNum
+  await addDoc(collection(db, 'tenants', tenantId, 'visits'), {
     patientId,
     patientName: patient.name, dob: patient.dob ?? null, sex: patient.sex ?? null,
     mobile: normalizeMobile(patient.mobile),
+    tokenNum, token,
     doctor, visitType: visitType || 'walk_in', complaint: complaint || '',
-    vitals: vitals || null,
+    vitals: vitals ? { ...vitals, recordedBy: 'Front desk' } : null,
     status: vitals?.bp ? 'vitals' : 'waiting',
     createdAt: serverTimestamp(),
   })
-  return { token: ref.id, patientId }
+  return { token, patientId }
 }
