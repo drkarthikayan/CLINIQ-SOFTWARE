@@ -58,6 +58,9 @@ service cloud.firestore {
       match /dispensary_log/{logId} {
         allow read, write: if inTenant(tenantId);
       }
+      match /waste_register/{wasteId} {
+        allow read, write: if inTenant(tenantId);
+      }
       match /pharmacy_stock/{batchId} {
         allow read: if inTenant(tenantId);
         allow write: if hasRole(tenantId, ['admin', 'doctor', 'nurse']) || isSuperadmin();

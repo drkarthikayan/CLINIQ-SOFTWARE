@@ -2,14 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../store/authStore'
 import { Chip, Stat, Modal } from '../components/ui'
 import {
-  watchStock, addStockItem, importStockRows,
-  isNearExpiry, isExpired, LOW_STOCK_THRESHOLD,
+  watchStock, addStockItem, importStockRows, writeOffBatch, drugMinStock,
+  isNearExpiry, isExpired,
 } from '../services/stock.service'
 import { watchPendingDispensary, watchDispensaryLog, dispenseRecord } from '../services/dispensary.service'
+import { watchWaste, addWaste, BMW_CATEGORIES } from '../services/waste.service'
 
 const rupee = (n) => '₹' + (n ?? 0).toLocaleString('en-IN')
-const EMPTY = { drug: '', batch: '', expiry: '', qty: '', mrp: '', purchasePrice: '' }
-const TABS = [['stock', 'Stock register'], ['dispensary', 'Dispensary'], ['log', 'Dispensary log']]
+const EMPTY = { drug: '', batch: '', expiry: '', qty: '', mrp: '', minStock: '', purchasePrice: '' }
+const EMPTY_WASTE = { category: BMW_CATEGORIES[0], item: '', qty: '', unit: 'pcs', disposal: '', handledBy: '' }
+const TABS = [['stock', 'Stock register'], ['dispensary', 'Dispensary'], ['log', 'Dispensary log'], ['waste', 'Waste register']]
 
 const timeStr = (t) => {
   const ms = typeof t === 'string' ? new Date(t).getTime() : typeof t?.toMillis === 'function' ? t.toMillis() : t?.seconds != null ? t.seconds * 1000 : 0
@@ -34,9 +36,11 @@ export default function Pharmacy() {
   const [stock, setStock] = useState([])
   const [pending, setPending] = useState([])
   const [log, setLog] = useState([])
+  const [waste, setWaste] = useState([])
   const [q, setQ] = useState('')
   const [modal, setModal] = useState(false)
   const [form, setForm] = useState(EMPTY)
+  const [wasteForm, setWasteForm] = useState(EMPTY_WASTE)
   const [busy, setBusy] = useState(false)
   const [toastMsg, setToastMsg] = useState('')
   const fileRef = useRef(null)
@@ -44,6 +48,7 @@ export default function Pharmacy() {
   useEffect(() => watchStock(user.tenantId, setStock), [user.tenantId])
   useEffect(() => watchPendingDispensary(user.tenantId, setPending), [user.tenantId])
   useEffect(() => watchDispensaryLog(user.tenantId, setLog), [user.tenantId])
+  useEffect(() => watchWaste(user.tenantId, setWaste), [user.tenantId])
   const toast = (m) => { setToastMsg(m); setTimeout(() => setToastMsg(''), 3600) }
 
   const drugTotals = useMemo(() => {
@@ -61,7 +66,7 @@ export default function Pharmacy() {
     const drugs = Object.keys(drugTotals)
     return {
       batches: stock.length,
-      lowStock: drugs.filter((d) => drugTotals[d] <= LOW_STOCK_THRESHOLD).length,
+      lowStock: drugs.filter((d) => drugTotals[d] <= drugMinStock(stock, d)).length,
       nearExpiry: stock.filter((r) => (r.qty ?? 0) > 0 && !isExpired(r.expiry) && isNearExpiry(r.expiry)).length,
       expired: stock.filter((r) => (r.qty ?? 0) > 0 && isExpired(r.expiry)).length,
     }
@@ -107,6 +112,22 @@ export default function Pharmacy() {
     } finally { setBusy(false) }
   }
 
+  const expiredBatches = useMemo(() => stock.filter((r) => (r.qty ?? 0) > 0 && isExpired(r.expiry)), [stock])
+  const logWaste = async () => {
+    if (!wasteForm.item.trim() || !wasteForm.qty) { toast('Enter an item and quantity'); return }
+    await addWaste(user.tenantId, { ...wasteForm, handledBy: wasteForm.handledBy || user.name })
+    setWasteForm(EMPTY_WASTE); toast('Waste entry recorded')
+  }
+  const discardExpired = async (r) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await addWaste(user.tenantId, { category: BMW_CATEGORIES[0], item: `${r.drug} · batch ${r.batch} (expired ${r.expiry})`, qty: r.qty, unit: 'pcs', disposal: 'Yellow bag', handledBy: user.name })
+      await writeOffBatch(user.tenantId, r.id)
+      toast(`Discarded ${r.drug} (${r.qty}) to waste`)
+    } finally { setBusy(false) }
+  }
+
   return (
     <div>
       <div className="flex bg-[#F0EFEA] rounded-lg p-0.5 mb-4 w-fit">
@@ -144,7 +165,7 @@ export default function Pharmacy() {
               </tr></thead>
               <tbody>
                 {rows.map((r) => {
-                  const expired = isExpired(r.expiry); const near = !expired && isNearExpiry(r.expiry); const low = stockOf(r.drug) <= LOW_STOCK_THRESHOLD
+                  const expired = isExpired(r.expiry); const near = !expired && isNearExpiry(r.expiry); const low = stockOf(r.drug) <= drugMinStock(stock, r.drug)
                   return (
                     <tr key={r.id} className="hover:bg-[#FBFAF7]">
                       <td className="td"><b>{r.drug}</b></td>
@@ -238,6 +259,69 @@ export default function Pharmacy() {
         </div>
       )}
 
+      {tab === 'waste' && (
+        <div className="grid lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 flex flex-col gap-4">
+            {expiredBatches.length > 0 && (
+              <div className="card overflow-hidden">
+                <div className="flex justify-between items-center px-4 py-3.5 border-b border-line">
+                  <b className="font-disp">Expired batches to discard</b>
+                  <span className="text-[12px] text-body-3">{expiredBatches.length} batch{expiredBatches.length === 1 ? '' : 'es'}</span>
+                </div>
+                <table className="w-full text-[13px] border-collapse">
+                  <tbody>
+                    {expiredBatches.map((r) => (
+                      <tr key={r.id} className="hover:bg-[#FBFAF7]">
+                        <td className="td"><b>{r.drug}</b> <span className="font-mono text-body-2">· {r.batch}</span></td>
+                        <td className="td font-mono text-body-2">exp {r.expiry}</td>
+                        <td className="td text-right font-mono">{r.qty}</td>
+                        <td className="td w-40"><button className="btn !py-1 !text-[12px]" disabled={busy} onClick={() => discardExpired(r)}>Discard → waste</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="card overflow-hidden">
+              <div className="flex justify-between items-center px-4 py-3.5 border-b border-line">
+                <b className="font-disp">Biomedical waste register</b>
+                <span className="text-[12px] text-body-3">this month · {waste.length} entr{waste.length === 1 ? 'y' : 'ies'}</span>
+              </div>
+              <table className="w-full text-[13px] border-collapse">
+                <thead><tr><th className="th">Item</th><th className="th w-56">Category</th><th className="th w-16 text-right">Qty</th><th className="th w-28">Disposal</th></tr></thead>
+                <tbody>
+                  {waste.map((w) => (
+                    <tr key={w.id}>
+                      <td className="td">{w.item}<div className="text-[11.5px] text-body-3">{w.handledBy || '—'}</div></td>
+                      <td className="td"><Chip tone={w.category?.startsWith('Yellow') ? 'amber' : w.category?.startsWith('Red') ? 'red' : w.category?.startsWith('Blue') ? 'teal' : 'gray'}>{(w.category || '').split(' — ')[0]}</Chip></td>
+                      <td className="td text-right font-mono">{w.qty} {w.unit}</td>
+                      <td className="td text-body-2">{w.disposal || '—'}</td>
+                    </tr>
+                  ))}
+                  {waste.length === 0 && <tr><td className="td text-body-3" colSpan={4}>No waste entries this month.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="card p-4 h-fit">
+            <b className="font-disp block mb-3">Record waste</b>
+            <div className="grid gap-2.5">
+              <div><label className="lbl">Category</label>
+                <select className="inp" value={wasteForm.category} onChange={(e) => setWasteForm((w) => ({ ...w, category: e.target.value }))}>
+                  {BMW_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select></div>
+              <div><label className="lbl">Item</label><input className="inp" placeholder="Used syringes, expired vials…" value={wasteForm.item} onChange={(e) => setWasteForm((w) => ({ ...w, item: e.target.value }))} /></div>
+              <div className="grid grid-cols-2 gap-2.5">
+                <div><label className="lbl">Qty</label><input className="inp font-mono" type="number" value={wasteForm.qty} onChange={(e) => setWasteForm((w) => ({ ...w, qty: e.target.value }))} /></div>
+                <div><label className="lbl">Unit</label><input className="inp" value={wasteForm.unit} onChange={(e) => setWasteForm((w) => ({ ...w, unit: e.target.value }))} /></div>
+              </div>
+              <div><label className="lbl">Disposal route</label><input className="inp" placeholder="CBWTF pickup / Yellow bag" value={wasteForm.disposal} onChange={(e) => setWasteForm((w) => ({ ...w, disposal: e.target.value }))} /></div>
+              <button className="btn-pri" onClick={logWaste}>+ Record</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <Modal open={modal} title="Add stock batch" onClose={() => { setModal(false); setForm(EMPTY) }}
         footer={<>
           <button className="btn" onClick={() => { setModal(false); setForm(EMPTY) }}>Cancel</button>
@@ -250,6 +334,7 @@ export default function Pharmacy() {
           <div><label className="lbl">Expiry</label><input className="inp font-mono" type="date" value={form.expiry} onChange={(e) => setForm((f) => ({ ...f, expiry: e.target.value }))} /></div>
           <div><label className="lbl">Quantity</label><input className="inp font-mono" type="number" value={form.qty} onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))} /></div>
           <div><label className="lbl">MRP ₹</label><input className="inp font-mono" type="number" value={form.mrp} onChange={(e) => setForm((f) => ({ ...f, mrp: e.target.value }))} /></div>
+          <div><label className="lbl">Min-stock alert</label><input className="inp font-mono" type="number" placeholder="10" value={form.minStock} onChange={(e) => setForm((f) => ({ ...f, minStock: e.target.value }))} /></div>
           <div className="col-span-2"><label className="lbl">Purchase price ₹ (optional)</label>
             <input className="inp font-mono" type="number" value={form.purchasePrice} onChange={(e) => setForm((f) => ({ ...f, purchasePrice: e.target.value }))} /></div>
         </div>

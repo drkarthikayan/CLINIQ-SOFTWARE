@@ -4,7 +4,7 @@
 // planDispense() and committed inside the consult-finalize writeBatch.
 // Stock is batch-granular (one doc per batch) per docs/FIRESTORE_SCHEMA.md.
 import { DEMO, db } from '../lib/firebase'
-import { collection, query, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, query, onSnapshot, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
 
 const NEAR_EXPIRY_DAYS = 90
 const LOW_STOCK_THRESHOLD = 10
@@ -146,9 +146,24 @@ function normalizeStockItem(item) {
     expiry: String(item.expiry || '').trim(),
     qty: Number(item.qty) || 0,
     mrp: Number(item.mrp) || 0,
+    minStock: item.minStock != null && item.minStock !== '' ? Number(item.minStock) : null,
     purchasePrice: item.purchasePrice != null && item.purchasePrice !== '' ? Number(item.purchasePrice) : null,
     importedFrom: item.importedFrom || 'manual',
   }
+}
+
+// A drug's low-stock threshold = the largest minStock set on any of its
+// batches, falling back to the default. Used by the Pharmacy register.
+export function drugMinStock(stockRows, drug) {
+  const mins = stockRows.filter((r) => r.drug === drug && r.minStock != null).map((r) => r.minStock)
+  return mins.length ? Math.max(...mins) : LOW_STOCK_THRESHOLD
+}
+
+// Write a batch's quantity off to zero (e.g. discarding an expired batch to the
+// biomedical waste register).
+export async function writeOffBatch(tenantId, batchId) {
+  if (DEMO) { demoStock = demoStock.map((r) => (r.id === batchId ? { ...r, qty: 0 } : r)); emitStock(); return }
+  await updateDoc(doc(db, 'tenants', tenantId, 'pharmacy_stock', batchId), { qty: 0 })
 }
 
 export async function addStockItem(tenantId, item) {
