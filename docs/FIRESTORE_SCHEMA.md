@@ -72,6 +72,12 @@ tenants/{tenantId}
 
   settings/billing
     priceList: [ { label, amount } ]
+
+--- platform level (superadmin only) — Session 9 ---
+platform/config
+  plans: [ { key, name, price, trialDays } ]     ← editable plan pricing
+platform_invoices/{invoiceId}                    ← SaaS invoices CLINIQ raises to clinics
+  tenantId, tenantName, plan, amount, period ("Jul 2026"), status, createdAt
 ```
 
 ## Query rules learned the hard way (from OHC)
