@@ -41,11 +41,11 @@ export async function staffLogin(email, password, mode = 'clinic') {
   }
   if (mode === 'platform' && !superadmin) {
     await fbSignOut(auth)
-    throw new Error('Not a platform admin account. Use the Clinic sign-in.')
+    throw new Error('Not a super admin account. Use the Clinic staff sign-in.')
   }
   if (mode === 'clinic' && !tenantId) {
     await fbSignOut(auth)
-    throw new Error('This is a platform owner account. Use the Platform sign-in.')
+    throw new Error('This is a super admin account. Use the Super admin sign-in.')
   }
 
   return {

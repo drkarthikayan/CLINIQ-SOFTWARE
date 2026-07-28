@@ -50,7 +50,7 @@ export default function AppShell({ children }) {
         {MODULES.filter(can).map((i) => <Item key={i.to} {...i} />)}
         {user.superadmin && (
           <>
-            <div className="text-[10.5px] uppercase tracking-widest text-[#5F7377] px-2.5 pt-4 pb-1.5 max-md:hidden">Platform</div>
+            <div className="text-[10.5px] uppercase tracking-widest text-[#5F7377] px-2.5 pt-4 pb-1.5 max-md:hidden">Super admin</div>
             <Item to="/superadmin" icon="◆" label="Superadmin" />
           </>
         )}
