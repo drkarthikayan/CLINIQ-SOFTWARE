@@ -6,12 +6,13 @@ import {
   startConsult, saveConsultDraft, saveDoctorVitals, finalizeConsult,
   listTemplates, saveTemplate, bumpTemplateUse,
 } from '../services/visits.service'
-import { watchStock, searchDrugs, checkAllergyMatch } from '../services/stock.service'
+import { watchStock, searchDrugs, qtyForRx } from '../services/stock.service'
 import { getPriceList } from '../services/billing.service'
-import { Chip } from '../components/ui'
+import { checkAllergy, flagVitals, bmiOf, validateConsult, detectDuplicates } from '../services/clinical.service'
+import { Chip, Modal } from '../components/ui'
 
-const EMPTY_VITALS = { bp: '', pulse: '', temp: '', spo2: '', weight: '' }
-const EMPTY_CONSULT = { mode: 'quick', complaint: '', dx: '', advice: '', s: '', o: '', a: '', p: '', labs: [], labsCustom: '', rx: [] }
+const EMPTY_VITALS = { bp: '', pulse: '', temp: '', spo2: '', weight: '', height: '' }
+const EMPTY_CONSULT = { mode: 'quick', complaint: '', dx: '', advice: '', s: '', o: '', a: '', p: '', labs: [], labsCustom: '', rx: [], reviewDays: '' }
 
 const LAB_GROUPS = [
   { key: 'blood', label: 'Blood', items: ['CBC', 'RBS', 'FBS/PPBS', 'HbA1c', 'LFT', 'RFT', 'Lipid profile', 'TSH', 'Urea/Creatinine', 'Electrolytes', 'CRP', 'Widal', 'Dengue NS1/IgM'] },
@@ -19,15 +20,21 @@ const LAB_GROUPS = [
   { key: 'imaging', label: 'Imaging & cardiac', items: ['ECG', 'Echo', 'TMT', 'X-ray', 'USG', 'CT', 'MRI'] },
 ]
 
-function VField({ label, value, onChange, placeholder, readOnly }) {
+const FLAG_STYLE = {
+  warn: 'border-caution bg-caution-wash',
+  high: 'border-danger bg-danger-wash',
+}
+
+function VField({ label, value, onChange, placeholder, readOnly, flag }) {
   return (
-    <div className="bg-[#FBFAF7] border border-line rounded-lg px-2.5 py-2">
+    <div className={`border rounded-lg px-2.5 py-2 ${flag ? FLAG_STYLE[flag.level] : 'bg-[#FBFAF7] border-line'}`}>
       <span className="lbl !mb-0.5">{label}</span>
       <input
         className="w-full bg-transparent font-mono text-[16px] font-medium focus:outline-none focus:border-b-2 focus:border-teal disabled:text-body-3"
         value={value ?? ''} placeholder={placeholder} disabled={readOnly}
         onChange={(e) => onChange?.(e.target.value)}
       />
+      {flag && <span className={`block text-[10.5px] mt-0.5 font-medium ${flag.level === 'high' ? 'text-danger' : 'text-caution'}`}>{flag.note}</span>}
     </div>
   )
 }
@@ -45,6 +52,8 @@ export default function Consultation() {
   const [vitalsDraft, setVitalsDraft] = useState(EMPTY_VITALS)
   const [rxSearch, setRxSearch] = useState('')
   const [toastMsg, setToastMsg] = useState('')
+  const [review, setReview] = useState(null)   // pre-completion checklist
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => watchTodayQueue(user.tenantId, setQueue), [user.tenantId])
   useEffect(() => watchStock(user.tenantId, setStock), [user.tenantId])
@@ -53,14 +62,14 @@ export default function Consultation() {
   const visit = useMemo(() => queue.find((v) => v.id === selectedId) || null, [queue, selectedId])
   const waitingList = useMemo(
     () => queue.filter((v) => v.status === 'waiting' || v.status === 'vitals')
-      .sort((a, b) => (a.token || a.id).localeCompare(b.token || b.id)),
+      .sort((a, b) => (a.tokenNum ?? 0) - (b.tokenNum ?? 0)),
     [queue],
   )
 
   useEffect(() => {
     if (!visit) { setPatient(null); return }
     setConsult(visit.consult ? { ...EMPTY_CONSULT, ...visit.consult } : { ...EMPTY_CONSULT, complaint: visit.complaint || '' })
-    setVitalsDraft(visit.vitalsDoctor || visit.vitals || EMPTY_VITALS)
+    setVitalsDraft({ ...EMPTY_VITALS, ...(visit.vitalsDoctor || visit.vitals || {}) })
     setRxSearch('')
     if (visit.patientId) getPatient(user.tenantId, visit.patientId).then(setPatient)
     else setPatient(null)
@@ -69,20 +78,21 @@ export default function Consultation() {
 
   const allergies = patient?.allergies?.length ? patient.allergies : (visit?.allergyFlag ? [visit.allergyFlag] : [])
   const conditions = patient?.conditions || []
+  const age = visit ? (visit.age ?? ageFrom(visit.dob)) : null
 
-  const toast = (m) => { setToastMsg(m); setTimeout(() => setToastMsg(''), 3400) }
+  const vFlags = useMemo(() => flagVitals(vitalsDraft, typeof age === 'number' ? age : undefined), [vitalsDraft, age])
+  const bmi = useMemo(() => bmiOf(vitalsDraft), [vitalsDraft])
+  const dupes = useMemo(() => detectDuplicates(consult.rx), [consult.rx])
+
+  const toast = (m) => { setToastMsg(m); setTimeout(() => setToastMsg(''), 3800) }
 
   const openVisit = async (v) => {
     setSelectedId(v.id)
     if (v.status !== 'in_consult') await startConsult(user.tenantId, v.id)
   }
-
   const backToQueue = () => setSelectedId(null)
 
-  const saveVitals = async () => {
-    await saveDoctorVitals(user.tenantId, visit.id, vitalsDraft, user.name)
-    toast('Vitals saved')
-  }
+  const saveVitals = async () => { await saveDoctorVitals(user.tenantId, visit.id, vitalsDraft, user.name); toast('Vitals saved') }
 
   const toggleLab = (code) => setConsult((c) => ({
     ...c, labs: c.labs.includes(code) ? c.labs.filter((x) => x !== code) : [...c.labs, code],
@@ -91,11 +101,12 @@ export default function Consultation() {
   const matchedDrugs = useMemo(() => searchDrugs(stock, rxSearch), [stock, rxSearch])
 
   const addRxLine = (pick) => {
-    const clash = checkAllergyMatch(allergies, pick.drug)
-    if (clash) { toast(`⚠ Blocked — patient is allergic to ${clash}`); return }
+    const hit = checkAllergy(allergies, pick.drug)
+    if (hit?.level === 'block') { toast(`⛔ Blocked — ${hit.reason}`); return }
+    if (hit?.level === 'caution') toast(`⚠ Caution — ${hit.reason}`)
     setConsult((c) => ({
       ...c,
-      rx: [...c.rx, { drug: pick.drug, dose: '', freq: '', days: 3, batchId: pick.batchId, mrp: pick.mrp, nearExpiry: pick.nearExpiry, lowStock: pick.lowStock }],
+      rx: [...c.rx, { drug: pick.drug, dose: '1 tab', freq: '', days: 3, batchId: pick.batchId, mrp: pick.mrp, nearExpiry: pick.nearExpiry, lowStock: pick.lowStock }],
     }))
     setRxSearch('')
   }
@@ -112,7 +123,7 @@ export default function Consultation() {
   }
 
   const saveAsTemplate = async () => {
-    const name = window.prompt('Template name?', consult.complaint?.slice(0, 30) || 'New template')
+    const name = window.prompt('Template name?', consult.dx?.slice(0, 30) || consult.complaint?.slice(0, 30) || 'New template')
     if (!name) return
     await saveTemplate(user.tenantId, {
       name, mode: consult.mode, complaint: consult.complaint, dx: consult.dx, advice: consult.advice,
@@ -124,20 +135,29 @@ export default function Consultation() {
 
   const saveDraft = async () => { await saveConsultDraft(user.tenantId, visit.id, consult); toast('Draft saved') }
 
-  const complete = async () => {
-    const blocked = consult.rx.find((r) => checkAllergyMatch(allergies, r.drug))
-    if (blocked) { toast('⚠ Cannot complete — an Rx line conflicts with a known allergy'); return }
-    const priceList = await getPriceList(user.tenantId)
-    const { dispensary } = await finalizeConsult(user.tenantId, {
-      visit, consult, vitalsDoctor: vitalsDraft, editedBy: user.name,
-      priceList, pharmacyOn: true,
-    })
-    toast(dispensary
-      ? 'Consult completed · billing queued · sent to pharmacy'
-      : 'Consult completed · billing queued')
-    setSelectedId(null)
+  // Run the clinical checks first; blockers stop, warnings need an explicit OK.
+  const attemptComplete = () => {
+    const { blockers, warnings } = validateConsult({ consult, allergies, vitalFlags: vFlags })
+    if (blockers.length) { setReview({ blockers, warnings }); return }
+    if (warnings.length) { setReview({ blockers: [], warnings }); return }
+    doComplete()
   }
 
+  const doComplete = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const priceList = await getPriceList(user.tenantId)
+      const { dispensary } = await finalizeConsult(user.tenantId, {
+        visit, consult, vitalsDoctor: vitalsDraft, editedBy: user.name, priceList, pharmacyOn: true,
+      })
+      setReview(null)
+      toast(dispensary ? 'Consult completed · billing queued · sent to pharmacy' : 'Consult completed · billing queued')
+      setSelectedId(null)
+    } finally { setBusy(false) }
+  }
+
+  /* ---------------- queue view ---------------- */
   if (!visit) {
     return (
       <div>
@@ -149,24 +169,27 @@ export default function Consultation() {
           </div>
           <table className="w-full text-[13px] border-collapse">
             <thead><tr>
-              <th className="th w-16">Token</th><th className="th">Patient</th>
-              <th className="th w-28">Doctor</th><th className="th w-24">Status</th><th className="th w-24"></th>
+              <th className="th w-20">Token</th><th className="th">Patient</th>
+              <th className="th w-28">Doctor</th><th className="th w-32">Vitals</th><th className="th w-28"></th>
             </tr></thead>
             <tbody>
               {waitingList.map((v) => (
                 <tr key={v.id} className="hover:bg-[#FBFAF7]">
-                  <td className="td font-mono font-semibold">{v.token || v.id.slice(0, 4)}</td>
+                  <td className="td"><span className="font-mono font-semibold whitespace-nowrap bg-teal-wash text-teal-dark rounded-md px-2 py-1 text-[12.5px]">{v.token || '—'}</span></td>
                   <td className="td">
                     <b>{v.patientName}</b> · {v.age ?? ageFrom(v.dob)} {v.sex}
-                    {v.allergyFlag && <span className="chip-red ml-1.5">⚠ {v.allergyFlag}</span>}
+                    {v.allergyFlag && <Chip tone="red" className="ml-1.5">⚠ {v.allergyFlag}</Chip>}
+                    {v.complaint && <div className="text-[12px] text-body-3">{v.complaint}</div>}
                   </td>
                   <td className="td text-body-2">{v.doctor}</td>
-                  <td className="td"><Chip tone={v.status === 'vitals' ? 'amber' : 'gray'}>{v.status === 'vitals' ? 'Vitals' : 'Waiting'}</Chip></td>
+                  <td className="td">{v.vitals?.bp
+                    ? <span className="font-mono text-[12px] text-body-2">{v.vitals.bp}{v.vitals.pulse ? ` · ${v.vitals.pulse}` : ''}</span>
+                    : <Chip tone="gray">Pending</Chip>}</td>
                   <td className="td"><button className="btn-pri !py-1.5 !text-[12px]" onClick={() => openVisit(v)}>Start consult →</button></td>
                 </tr>
               ))}
               {waitingList.length === 0 && (
-                <tr><td className="td text-body-3" colSpan={5}>No one waiting. Check patients in from Front desk.</td></tr>
+                <tr><td className="td text-center text-body-3 py-8" colSpan={5}>No one waiting. Check patients in from Front desk.</td></tr>
               )}
             </tbody>
           </table>
@@ -175,13 +198,14 @@ export default function Consultation() {
     )
   }
 
+  /* ---------------- consult view ---------------- */
   return (
     <div>
       {toastMsg && <div className="card px-4 py-2.5 mb-4 text-[13px] font-medium text-teal-dark bg-teal-wash border-teal">{toastMsg}</div>}
 
       <div className="flex items-center justify-between mb-3">
         <button className="btn-ghost !px-0 text-[12.5px]" onClick={backToQueue}>← Back to queue</button>
-        <span className="font-mono text-[12px] text-body-3">Token {visit.token || visit.id.slice(0, 4)}</span>
+        <span className="font-mono text-[12px] text-body-3">Token {visit.token || '—'}</span>
       </div>
 
       {/* Patient banner */}
@@ -190,7 +214,7 @@ export default function Consultation() {
           <div>
             <div className="font-disp text-[18px] font-semibold">{visit.patientName}</div>
             <div className="text-body-2 text-[13px]">
-              {visit.age ?? ageFrom(visit.dob)} yrs · {visit.sex} · {patient?.relation || 'Self'}{patient?.mrn ? ` · MRN ${patient.mrn}` : ''}
+              {age} yrs · {visit.sex} · {patient?.relation || 'Self'}{patient?.mrn ? ` · MRN ${patient.mrn}` : ''}
             </div>
           </div>
           <div className="flex flex-wrap gap-1.5 justify-end max-w-[420px]">
@@ -199,27 +223,36 @@ export default function Consultation() {
         </div>
         {allergies.length > 0 && (
           <div className="mt-3 bg-danger-wash border border-danger rounded-lg px-3 py-2 text-[13px] font-medium text-danger">
-            ⚠ Allergy: {allergies.join(', ')} — prescribing any matching drug is blocked below.
+            ⚠ Allergy: {allergies.join(', ')} — same-class drugs are blocked below, cross-reactive ones flagged.
           </div>
         )}
       </div>
 
       {/* Vitals */}
       <div className="card p-4 mb-4">
-        <b className="font-disp block mb-3">Vitals</b>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3">
-          <VField label="BP (nurse)" value={visit.vitals?.bp} readOnly />
-          <VField label="Pulse (nurse)" value={visit.vitals?.pulse} readOnly />
-          <VField label="Temp (nurse)" value={visit.vitals?.temp} readOnly />
-          <VField label="SpO2 (nurse)" value={visit.vitals?.spo2} readOnly />
-          <VField label="Weight (nurse)" value={visit.vitals?.weight} readOnly />
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <b className="font-disp">Vitals</b>
+          <div className="flex items-center gap-2">
+            {bmi && <Chip tone={bmi.level === 'warn' ? 'amber' : 'green'}>BMI {bmi.value} · {bmi.band}</Chip>}
+            <span className="text-[11.5px] text-body-3">{typeof age === 'number' && age < 12 ? 'Paediatric — BP/pulse flags off' : 'Adult reference ranges'}</span>
+          </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
-          <VField label="BP" value={vitalsDraft.bp} onChange={(v) => setVitalsDraft((s) => ({ ...s, bp: v }))} placeholder="120/80" />
-          <VField label="Pulse" value={vitalsDraft.pulse} onChange={(v) => setVitalsDraft((s) => ({ ...s, pulse: v }))} placeholder="76" />
-          <VField label="Temp °F" value={vitalsDraft.temp} onChange={(v) => setVitalsDraft((s) => ({ ...s, temp: v }))} placeholder="98.6" />
-          <VField label="SpO2" value={vitalsDraft.spo2} onChange={(v) => setVitalsDraft((s) => ({ ...s, spo2: v }))} placeholder="99" />
+        {visit.vitals?.bp && (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3">
+            <VField label="BP (nurse)" value={visit.vitals?.bp} readOnly />
+            <VField label="Pulse (nurse)" value={visit.vitals?.pulse} readOnly />
+            <VField label="Temp (nurse)" value={visit.vitals?.temp} readOnly />
+            <VField label="SpO₂ (nurse)" value={visit.vitals?.spo2} readOnly />
+            <VField label="Weight (nurse)" value={visit.vitals?.weight} readOnly />
+          </div>
+        )}
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5">
+          <VField label="BP" value={vitalsDraft.bp} flag={vFlags.bp} onChange={(v) => setVitalsDraft((s) => ({ ...s, bp: v }))} placeholder="120/80" />
+          <VField label="Pulse" value={vitalsDraft.pulse} flag={vFlags.pulse} onChange={(v) => setVitalsDraft((s) => ({ ...s, pulse: v }))} placeholder="76" />
+          <VField label="Temp °F" value={vitalsDraft.temp} flag={vFlags.temp} onChange={(v) => setVitalsDraft((s) => ({ ...s, temp: v }))} placeholder="98.6" />
+          <VField label="SpO₂" value={vitalsDraft.spo2} flag={vFlags.spo2} onChange={(v) => setVitalsDraft((s) => ({ ...s, spo2: v }))} placeholder="99" />
           <VField label="Weight kg" value={vitalsDraft.weight} onChange={(v) => setVitalsDraft((s) => ({ ...s, weight: v }))} placeholder="58" />
+          <VField label="Height cm" value={vitalsDraft.height} onChange={(v) => setVitalsDraft((s) => ({ ...s, height: v }))} placeholder="165" />
         </div>
         <div className="flex justify-end mt-2.5"><button className="btn" onClick={saveVitals}>Save vitals</button></div>
       </div>
@@ -284,20 +317,25 @@ export default function Consultation() {
 
       {/* Rx */}
       <div className="card p-4 mb-4">
-        <b className="font-disp block mb-3">Prescription</b>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <b className="font-disp">Prescription</b>
+          <span className="text-[11.5px] text-body-3">Quantity is calculated from frequency × days — that's what pharmacy dispenses.</span>
+        </div>
         <div className="relative mb-3">
           <input className="inp" placeholder="Search drug to add…" value={rxSearch} onChange={(e) => setRxSearch(e.target.value)} />
           {matchedDrugs.length > 0 && (
             <div className="absolute z-10 mt-1 w-full bg-white border border-line-strong rounded-lg shadow-lg overflow-hidden">
               {matchedDrugs.map((m) => {
-                const blocked = checkAllergyMatch(allergies, m.drug)
+                const hit = checkAllergy(allergies, m.drug)
+                const blocked = hit?.level === 'block'
                 return (
-                  <button key={m.drug} disabled={!!blocked}
+                  <button key={m.drug} disabled={blocked}
                     className={`w-full text-left px-3 py-2 text-[13px] flex items-center justify-between gap-2 ${blocked ? 'bg-danger-wash text-danger cursor-not-allowed' : 'hover:bg-[#FBFAF7]'}`}
                     onClick={() => addRxLine(m)}>
                     <span>{m.drug}</span>
                     <span className="flex gap-1.5 items-center shrink-0">
-                      {blocked && <Chip tone="red">Allergy</Chip>}
+                      {blocked && <Chip tone="red">⛔ Allergy</Chip>}
+                      {hit?.level === 'caution' && <Chip tone="amber">⚠ Cross-reactive</Chip>}
                       {m.nearExpiry && <Chip tone="amber">Batch exp {m.expiry}</Chip>}
                       {m.lowStock && <Chip tone="red">Low stock</Chip>}
                       <span className="font-mono text-[11.5px] text-body-3">qty {m.totalQty}</span>
@@ -308,34 +346,86 @@ export default function Consultation() {
             </div>
           )}
         </div>
-        <table className="w-full text-[13px] border-collapse">
-          <thead><tr>
-            <th className="th">Drug</th><th className="th w-28">Dose</th><th className="th w-32">Frequency</th>
-            <th className="th w-16">Days</th><th className="th w-16"></th>
-          </tr></thead>
-          <tbody>
-            {consult.rx.map((r, i) => (
-              <tr key={i}>
-                <td className="td">
-                  {r.drug}
-                  {r.nearExpiry && <Chip tone="amber" className="ml-1.5">near-expiry batch</Chip>}
-                  {r.lowStock && <Chip tone="red" className="ml-1.5">low stock</Chip>}
-                </td>
-                <td className="td"><input className="inp !py-1" value={r.dose} onChange={(e) => updateRxLine(i, { dose: e.target.value })} /></td>
-                <td className="td"><input className="inp !py-1" value={r.freq} onChange={(e) => updateRxLine(i, { freq: e.target.value })} /></td>
-                <td className="td"><input className="inp !py-1" type="number" value={r.days} onChange={(e) => updateRxLine(i, { days: Number(e.target.value) })} /></td>
-                <td className="td"><button className="btn-ghost !text-[12px]" onClick={() => removeRxLine(i)}>Remove</button></td>
-              </tr>
-            ))}
-            {consult.rx.length === 0 && <tr><td className="td text-body-3" colSpan={5}>No drugs added yet.</td></tr>}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px] border-collapse min-w-[640px]">
+            <thead><tr>
+              <th className="th">Drug</th><th className="th w-28">Dose</th><th className="th w-36">Frequency</th>
+              <th className="th w-16">Days</th><th className="th w-20 text-right">Qty</th><th className="th w-16"></th>
+            </tr></thead>
+            <tbody>
+              {consult.rx.map((r, i) => {
+                const hit = checkAllergy(allergies, r.drug)
+                const dup = dupes.find((d) => d.index === i)
+                const qty = qtyForRx(r)
+                return (
+                  <tr key={i} className={hit?.level === 'block' ? 'bg-danger-wash' : ''}>
+                    <td className="td">
+                      <div>{r.drug}</div>
+                      <div className="flex gap-1.5 flex-wrap mt-1">
+                        {hit?.level === 'block' && <Chip tone="red">⛔ {hit.reason}</Chip>}
+                        {hit?.level === 'caution' && <Chip tone="amber">⚠ {hit.reason}</Chip>}
+                        {dup && <Chip tone="amber">⚠ {dup.reason}</Chip>}
+                        {r.nearExpiry && <Chip tone="amber">near-expiry batch</Chip>}
+                        {r.lowStock && <Chip tone="red">low stock</Chip>}
+                      </div>
+                    </td>
+                    <td className="td"><input className="inp !py-1" placeholder="1 tab" value={r.dose} onChange={(e) => updateRxLine(i, { dose: e.target.value })} /></td>
+                    <td className="td"><input className="inp !py-1" placeholder="TDS after food" value={r.freq} onChange={(e) => updateRxLine(i, { freq: e.target.value })} /></td>
+                    <td className="td"><input className="inp !py-1" type="number" value={r.days} onChange={(e) => updateRxLine(i, { days: Number(e.target.value) })} /></td>
+                    <td className="td text-right font-mono font-semibold">{qty || '—'}</td>
+                    <td className="td"><button className="btn-ghost !text-[12px]" onClick={() => removeRxLine(i)}>✕</button></td>
+                  </tr>
+                )
+              })}
+              {consult.rx.length === 0 && <tr><td className="td text-body-3" colSpan={6}>No drugs added yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
+          <span className="lbl !mb-0">Review after</span>
+          <input className="inp !w-20 !py-1 font-mono" type="number" placeholder="7" value={consult.reviewDays}
+            onChange={(e) => setConsult((c) => ({ ...c, reviewDays: e.target.value }))} />
+          <span className="text-[12.5px] text-body-2">days {consult.reviewDays ? `· advise return by ${new Date(Date.now() + Number(consult.reviewDays) * 86400000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : '(optional)'}</span>
+        </div>
       </div>
 
       <div className="flex justify-end gap-2.5 mb-8">
         <button className="btn" onClick={saveDraft}>Save draft</button>
-        <button className="btn-pri" onClick={complete}>Complete consult</button>
+        <button className="btn-pri" disabled={busy} onClick={attemptComplete}>Complete consult</button>
       </div>
+
+      {/* Pre-completion clinical checklist */}
+      <Modal
+        open={!!review}
+        title={review?.blockers?.length ? 'Cannot complete — safety check failed' : 'Confirm before completing'}
+        onClose={() => setReview(null)}
+        footer={review?.blockers?.length ? (
+          <button className="btn-pri" onClick={() => setReview(null)}>Back to consult</button>
+        ) : (<>
+          <button className="btn" onClick={() => setReview(null)}>Back to consult</button>
+          <button className="btn-pri" disabled={busy} onClick={doComplete}>Complete anyway</button>
+        </>)}
+      >
+        {review?.blockers?.length > 0 && (
+          <div className="mb-3">
+            <b className="text-[13px] text-danger block mb-1.5">Must be resolved</b>
+            <ul className="list-disc ml-5 text-[13px] text-danger grid gap-1">
+              {review.blockers.map((b, i) => <li key={i}>{b}</li>)}
+            </ul>
+          </div>
+        )}
+        {review?.warnings?.length > 0 && (
+          <div>
+            <b className="text-[13px] text-caution block mb-1.5">Please confirm</b>
+            <ul className="list-disc ml-5 text-[13px] text-body-2 grid gap-1">
+              {review.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </div>
+        )}
+        <p className="text-[12px] text-body-3 mt-3">
+          Class-aware allergy checking covers common drug families and documented cross-reactivity. It supports, not replaces, your clinical judgement.
+        </p>
+      </Modal>
     </div>
   )
 }
