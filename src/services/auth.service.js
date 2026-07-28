@@ -1,7 +1,12 @@
 // Auth flow (OHC pattern): email/password sign-in, then tenantId + role
-// resolved from custom claims set by scripts/seedTenant.mjs (later: Cloud Function).
-// A `superadmin` claim (see scripts/setSuperadmin.mjs) is separate from the
-// per-tenant role and lets an account cross tenants in the Superadmin tool.
+// resolved from custom claims set by scripts/seedTenant.mjs / seedStaff.mjs.
+//
+// Two sign-in modes, one credential store:
+//   • clinic   — staff of one tenant. Claims carry { tenantId, role }. Lands
+//                in the clinic app scoped to that tenant.
+//   • platform — the SaaS owner. Claim carries { superadmin: true } and NO
+//                tenantId. Lands in the cross-tenant Platform console.
+// A legacy hybrid account (tenantId + superadmin) can sign in either way.
 import { DEMO, auth } from '../lib/firebase'
 import {
   signInWithEmailAndPassword,
@@ -9,30 +14,45 @@ import {
   onAuthStateChanged,
 } from 'firebase/auth'
 
-const DEMO_USER = {
-  uid: 'demo-uid',
-  email: 'dr.priya@sunriseclinic.in',
-  name: 'Dr. Priya',
-  role: 'doctor',
-  tenantId: 'demo-clinic',
-  tenantName: 'Sunrise Clinic',
-  superadmin: true,
+// Public demo clinic account (safe to show on the login screen). Created live
+// by scripts/seedDemoTenant.mjs. Never carries the superadmin claim.
+export const DEMO_CLINIC = { email: 'demo@cliniq.app', password: 'Demo@1234' }
+
+const CLINIC_DEMO_USER = {
+  uid: 'demo-doctor', email: DEMO_CLINIC.email, name: 'Dr. Demo',
+  role: 'doctor', tenantId: 'demo-clinic', tenantName: 'Demo Clinic', superadmin: false,
+}
+const PLATFORM_DEMO_USER = {
+  uid: 'demo-platform', email: 'owner@cliniq.app', name: 'Platform Owner',
+  role: 'owner', tenantId: null, tenantName: null, superadmin: true,
 }
 
-export async function staffLogin(email, password) {
-  if (DEMO) return DEMO_USER
+// mode: 'clinic' | 'platform'
+export async function staffLogin(email, password, mode = 'clinic') {
+  if (DEMO) return mode === 'platform' ? PLATFORM_DEMO_USER : CLINIC_DEMO_USER
+
   const cred = await signInWithEmailAndPassword(auth, email, password)
   const token = await cred.user.getIdTokenResult(true)
   const { tenantId, role, superadmin } = token.claims
+
   if (!tenantId && !superadmin) {
     await fbSignOut(auth)
     throw new Error('Account has no clinic assigned. Run the seed script or contact admin.')
   }
+  if (mode === 'platform' && !superadmin) {
+    await fbSignOut(auth)
+    throw new Error('Not a platform admin account. Use the Clinic sign-in.')
+  }
+  if (mode === 'clinic' && !tenantId) {
+    await fbSignOut(auth)
+    throw new Error('This is a platform owner account. Use the Platform sign-in.')
+  }
+
   return {
     uid: cred.user.uid,
     email: cred.user.email,
     name: cred.user.displayName || cred.user.email,
-    role: role || 'frontdesk',
+    role: role || (superadmin && !tenantId ? 'owner' : 'frontdesk'),
     tenantId: tenantId || null,
     superadmin: !!superadmin,
   }

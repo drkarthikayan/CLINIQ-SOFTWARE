@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './store/authStore'
 import AppShell from './components/AppShell'
+import PlatformShell from './components/PlatformShell'
 import Login from './pages/Login'
 import FrontDesk from './pages/FrontDesk'
 
@@ -21,6 +22,16 @@ const Spin = () => (
 export default function App() {
   const user = useAuth((s) => s.user)
   if (!user) return <Login />
+
+  // Platform owner (superadmin, no tenant) → cross-tenant console, no clinic rail.
+  if (user.superadmin && !user.tenantId) {
+    return (
+      <PlatformShell>
+        <Suspense fallback={<Spin />}><SuperAdmin /></Suspense>
+      </PlatformShell>
+    )
+  }
+
   return (
     <AppShell>
       <Suspense fallback={<Spin />}>
