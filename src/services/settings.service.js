@@ -10,7 +10,7 @@ const DEFAULT_MODULES = { pharmacy: true, frontDeskVitals: true, sms: true, abha
 // Prescription letterhead — clinic registration and prescriber details are
 // required on a printed Indian Rx. rxLang adds a vernacular dosage line under
 // each English sig ('' = English only).
-const DEFAULT_LETTERHEAD = { address: '', phone: '', regNo: '', doctorName: '', doctorQualification: '', doctorRegNo: '', rxLang: '' }
+const DEFAULT_LETTERHEAD = { logoUrl: '', address: '', phone: '', regNo: '', doctorName: '', doctorQualification: '', doctorRegNo: '', rxLang: '' }
 
 let demoTenant = {
   id: 'demo-clinic', name: 'Sunrise Clinic', city: 'Chennai', plan: 'starter',
