@@ -134,6 +134,25 @@ export function _demoUpdateVisit(visitId, patch) {
   demoEmit()
 }
 
+// Edit a patient's record — most importantly allergies and conditions, which
+// drive the prescribing safety checks. Without this the allergy block relies on
+// data no clinician can enter.
+export async function updatePatient(tenantId, patientId, patch) {
+  if (DEMO) {
+    const i = demoPatients.findIndex((p) => p.id === patientId)
+    if (i >= 0) demoPatients[i] = { ...demoPatients[i], ...patch }
+    // Keep the queue's denormalized allergy flag in step so the banner and
+    // Front-desk chip update immediately.
+    if (patch.allergies) {
+      demoQueue = demoQueue.map((v) => (v.patientId === patientId
+        ? { ...v, allergyFlag: patch.allergies[0]?.split(' ')[0] || null } : v))
+      demoEmit()
+    }
+    return demoPatients[i]
+  }
+  await updateDoc(doc(db, 'tenants', tenantId, 'patients', patientId), patch)
+}
+
 // Nurse vitals recorded from the front desk AFTER check-in. Writes the nurse
 // entry (never the doctor's `vitalsDoctor` audit field) and moves a waiting
 // visit to `vitals`.
