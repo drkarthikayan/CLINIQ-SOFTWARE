@@ -1,0 +1,15 @@
+{
+  "name": "CLINIQ — Clinic OS",
+  "short_name": "CLINIQ",
+  "description": "Clinic operating system for Indian general practice — queue, consult, pharmacy and billing.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#FAF9F6",
+  "theme_color": "#15262E",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

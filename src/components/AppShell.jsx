@@ -3,6 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { useAuth } from '../store/authStore'
 import { signOut } from '../services/auth.service'
 import { DEMO } from '../lib/firebase'
+import { useOnline } from '../lib/useOnline'
 
 const NAV = [
   { to: '/frontdesk', label: 'Front desk', icon: '▤', roles: ['admin', 'doctor', 'nurse', 'frontdesk'] },
@@ -38,6 +39,7 @@ export default function AppShell({ children }) {
   const { user, clear, setUser } = useAuth()
   const { pathname } = useLocation()
   const [moreOpen, setMoreOpen] = useState(false)
+  const online = useOnline()
   const can = (item) => item.roles.includes(user.role)
   const initials = user.name.split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()
 
@@ -95,10 +97,18 @@ export default function AppShell({ children }) {
               {user.tenantName || user.tenantId} · {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
             </span>
             <span className="text-[12.5px] text-body-2 lg:hidden">{user.tenantName || user.tenantId}</span>
+            <span title={online ? 'Online' : 'Offline — changes queue locally'}
+              className={`w-2.5 h-2.5 rounded-full shrink-0 ${online ? 'bg-ok' : 'bg-caution'}`} />
             <button className="w-8 h-8 rounded-full bg-teal text-white text-xs font-semibold md:hidden" onClick={async () => { await signOut(); clear() }} title="Sign out">{initials}</button>
           </div>
         </header>
 
+        {!online && (
+          <div className="bg-caution-wash border-b border-caution px-6 max-md:px-4 py-2 text-[12.5px] text-caution flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-caution shrink-0" />
+            <span><b>Working offline</b> — consults and check-ins are saved on this device and sync automatically when the connection returns.</span>
+          </div>
+        )}
         <div className="p-6 max-md:p-4 max-w-[1180px] w-full max-md:pb-24">{children}</div>
       </div>
 

@@ -49,3 +49,23 @@ firebase deploy --only hosting     # single site for now; add prod/uat targets l
 - Never plain `firebase deploy` once multiple targets exist.
 - Firebase deploy circular-JSON error is transient — retry.
 - Stale-file trap: grep a unique string in any file you copy from Downloads before `cp`.
+
+
+## Offline-first (Session 17)
+
+CLINIQ keeps working when the connection drops - the normal case in Tier-2/3 towns.
+
+- **Data**: Firestore uses `persistentLocalCache` (IndexedDB). Reads are served
+  from the local copy when offline; writes queue and sync on reconnect. The
+  multi-tab manager lets front desk + consult room tabs share one cache.
+- **App shell**: `public/sw.js` caches the shell so the page opens with no
+  network at all. Navigations are network-first (a deploy is picked up
+  immediately) with the cached shell as fallback; `/assets/*` are content-hashed
+  and cached first. Cross-origin requests (Firestore, Auth, fonts) are never
+  intercepted.
+- **Installable**: `public/manifest.webmanifest` - staff can add CLINIQ to a
+  phone/tablet home screen and run it standalone.
+- **UI**: an amber "Working offline" strip plus a status dot in the header.
+
+**Bumping the shell cache:** change `CACHE = 'cliniq-shell-v1'` in `public/sw.js`
+when the shell files themselves change, so old caches are dropped on activate.
