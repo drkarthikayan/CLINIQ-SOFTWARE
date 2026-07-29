@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../store/authStore'
-import { watchTodayQueue, ageFrom, getPatient } from '../services/patients.service'
+import { watchTodayQueue, ageFrom, getPatient, getPatientVisits } from '../services/patients.service'
 import {
   startConsult, saveConsultDraft, saveDoctorVitals, finalizeConsult,
   listTemplates, saveTemplate, bumpTemplateUse,
@@ -9,6 +9,8 @@ import {
 import { watchStock, searchDrugs, qtyForRx } from '../services/stock.service'
 import { getPriceList } from '../services/billing.service'
 import { checkAllergy, flagVitals, bmiOf, validateConsult, detectDuplicates } from '../services/clinical.service'
+import { getTenantSettings } from '../services/settings.service'
+import { openRxPrint, whatsappRxLink } from '../lib/rxSheet'
 import { Chip, Modal } from '../components/ui'
 
 const EMPTY_VITALS = { bp: '', pulse: '', temp: '', spo2: '', weight: '', height: '' }
@@ -54,10 +56,13 @@ export default function Consultation() {
   const [toastMsg, setToastMsg] = useState('')
   const [review, setReview] = useState(null)   // pre-completion checklist
   const [busy, setBusy] = useState(false)
+  const [settings, setSettings] = useState(null)
+  const [lastRx, setLastRx] = useState(null)   // most recent previous prescription
 
   useEffect(() => watchTodayQueue(user.tenantId, setQueue), [user.tenantId])
   useEffect(() => watchStock(user.tenantId, setStock), [user.tenantId])
   useEffect(() => { listTemplates(user.tenantId).then(setTemplates) }, [user.tenantId])
+  useEffect(() => { getTenantSettings(user.tenantId).then(setSettings) }, [user.tenantId])
 
   const visit = useMemo(() => queue.find((v) => v.id === selectedId) || null, [queue, selectedId])
   const waitingList = useMemo(
@@ -71,8 +76,15 @@ export default function Consultation() {
     setConsult(visit.consult ? { ...EMPTY_CONSULT, ...visit.consult } : { ...EMPTY_CONSULT, complaint: visit.complaint || '' })
     setVitalsDraft({ ...EMPTY_VITALS, ...(visit.vitalsDoctor || visit.vitals || {}) })
     setRxSearch('')
-    if (visit.patientId) getPatient(user.tenantId, visit.patientId).then(setPatient)
-    else setPatient(null)
+    setLastRx(null)
+    if (visit.patientId) {
+      getPatient(user.tenantId, visit.patientId).then(setPatient)
+      // Chronic patients repeat the same script — surface the last one to copy.
+      getPatientVisits(user.tenantId, visit.patientId).then((rows) => {
+        const prev = rows.find((r) => r.id !== visit.id && r.consult?.rx?.length)
+        setLastRx(prev ? { when: prev.createdAt, rx: prev.consult.rx, dx: prev.consult.dx } : null)
+      })
+    } else setPatient(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visit?.id])
 
@@ -135,6 +147,30 @@ export default function Consultation() {
 
   const saveDraft = async () => { await saveConsultDraft(user.tenantId, visit.id, consult); toast('Draft saved') }
 
+  // Chronic refill: copy the previous script, re-running the allergy guard in
+  // case the patient's allergy list changed since that visit.
+  const repeatLastRx = () => {
+    if (!lastRx?.rx?.length) return
+    const safe = [], blocked = []
+    lastRx.rx.forEach((r) => (checkAllergy(allergies, r.drug)?.level === 'block' ? blocked : safe).push(r))
+    setConsult((c) => ({ ...c, rx: [...c.rx, ...safe.map((r) => ({ ...r }))] }))
+    toast(blocked.length
+      ? `Repeated ${safe.length} medicine${safe.length === 1 ? '' : 's'} · ${blocked.length} skipped (allergy)`
+      : `Repeated ${safe.length} medicine${safe.length === 1 ? '' : 's'} from the last visit`)
+  }
+
+  const rxPayload = () => ({
+    clinic: { name: settings?.name || user.tenantName || user.tenantId, city: settings?.city, ...(settings?.letterhead || {}) },
+    doctor: { name: user.name, qualification: settings?.letterhead?.doctorQualification, regNo: settings?.letterhead?.doctorRegNo },
+    patient, visit, consult, lang: settings?.letterhead?.rxLang || '',
+  })
+  const printRx = () => { if (!openRxPrint(rxPayload())) toast('Allow pop-ups to print the prescription') }
+  const shareRx = () => {
+    const mobile = patient?.mobile || visit.mobile
+    if (!mobile) { toast('No mobile number on this patient record'); return }
+    window.open(whatsappRxLink({ ...rxPayload(), mobile }), '_blank')
+  }
+
   // Run the clinical checks first; blockers stop, warnings need an explicit OK.
   const attemptComplete = () => {
     const { blockers, warnings } = validateConsult({ consult, allergies, vitalFlags: vFlags })
@@ -156,6 +192,22 @@ export default function Consultation() {
       setSelectedId(null)
     } finally { setBusy(false) }
   }
+
+  // Keyboard ergonomics: doctors type, they don't reach for the mouse.
+  //   Ctrl/Cmd+Enter complete · Ctrl/Cmd+S draft · "/" focus drug search · Esc back
+  useEffect(() => {
+    if (!visit) return
+    const onKey = (e) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName)
+      const mod = e.ctrlKey || e.metaKey
+      if (mod && e.key === 'Enter') { e.preventDefault(); attemptComplete() }
+      else if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveDraft() }
+      else if (e.key === '/' && !typing) { e.preventDefault(); document.getElementById('rx-search')?.focus() }
+      else if (e.key === 'Escape' && !review && !typing) backToQueue()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   /* ---------------- queue view ---------------- */
   if (!visit) {
@@ -318,11 +370,19 @@ export default function Consultation() {
       {/* Rx */}
       <div className="card p-4 mb-4">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-          <b className="font-disp">Prescription</b>
+          <div className="flex items-center gap-2 flex-wrap">
+            <b className="font-disp">Prescription</b>
+            {lastRx && (
+              <button className="btn !py-1 !px-2 !text-[12px]" onClick={repeatLastRx}
+                title={lastRx.rx.map((r) => r.drug).join(', ')}>
+                ↻ Repeat last Rx ({lastRx.rx.length})
+              </button>
+            )}
+          </div>
           <span className="text-[11.5px] text-body-3">Quantity is calculated from frequency × days — that's what pharmacy dispenses.</span>
         </div>
         <div className="relative mb-3">
-          <input className="inp" placeholder="Search drug to add…" value={rxSearch} onChange={(e) => setRxSearch(e.target.value)} />
+          <input id="rx-search" className="inp" placeholder="Search drug to add…  ( / )" value={rxSearch} onChange={(e) => setRxSearch(e.target.value)} />
           {matchedDrugs.length > 0 && (
             <div className="absolute z-10 mt-1 w-full bg-white border border-line-strong rounded-lg shadow-lg overflow-hidden">
               {matchedDrugs.map((m) => {
@@ -389,9 +449,14 @@ export default function Consultation() {
         </div>
       </div>
 
-      <div className="flex justify-end gap-2.5 mb-8">
-        <button className="btn" onClick={saveDraft}>Save draft</button>
-        <button className="btn-pri" disabled={busy} onClick={attemptComplete}>Complete consult</button>
+      <div className="flex justify-between items-center gap-2.5 mb-8 flex-wrap">
+        <span className="text-[11.5px] text-body-3 font-mono">Ctrl+Enter complete · Ctrl+S draft · / drug search · Esc back</span>
+        <div className="flex gap-2.5 flex-wrap">
+          <button className="btn" onClick={printRx}>🖨 Print Rx</button>
+          <button className="btn" onClick={shareRx}>WhatsApp</button>
+          <button className="btn" onClick={saveDraft}>Save draft</button>
+          <button className="btn-pri" disabled={busy} onClick={attemptComplete}>Complete consult</button>
+        </div>
       </div>
 
       {/* Pre-completion clinical checklist */}
