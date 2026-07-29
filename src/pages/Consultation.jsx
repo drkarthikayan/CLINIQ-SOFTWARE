@@ -111,6 +111,7 @@ export default function Consultation() {
   }))
 
   const matchedDrugs = useMemo(() => searchDrugs(stock, rxSearch), [stock, rxSearch])
+  const stockOf = (drug) => stock.filter((r) => r.drug === drug).reduce((s2, r) => s2 + (r.qty ?? 0), 0)
 
   const addRxLine = (pick) => {
     const hit = checkAllergy(allergies, pick.drug)
@@ -432,7 +433,18 @@ export default function Consultation() {
                     <td className="td"><input className="inp !py-1" placeholder="1 tab" value={r.dose} onChange={(e) => updateRxLine(i, { dose: e.target.value })} /></td>
                     <td className="td"><input className="inp !py-1" placeholder="TDS after food" value={r.freq} onChange={(e) => updateRxLine(i, { freq: e.target.value })} /></td>
                     <td className="td"><input className="inp !py-1" type="number" value={r.days} onChange={(e) => updateRxLine(i, { days: Number(e.target.value) })} /></td>
-                    <td className="td text-right font-mono font-semibold">{qty || '—'}</td>
+                    <td className="td text-right">
+                      <div className="font-mono font-semibold">{qty || '—'}</div>
+                      {qty > 0 && r.batchId && (() => {
+                        const have = stockOf(r.drug)
+                        const left = have - qty
+                        return (
+                          <div className={`text-[10.5px] font-mono ${left < 0 ? 'text-danger' : 'text-body-3'}`}>
+                            {left < 0 ? `short by ${Math.abs(left)}` : `${have} → ${left}`}
+                          </div>
+                        )
+                      })()}
+                    </td>
                     <td className="td"><button className="btn-ghost !text-[12px]" onClick={() => removeRxLine(i)}>✕</button></td>
                   </tr>
                 )

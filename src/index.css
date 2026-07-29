@@ -21,6 +21,11 @@ body { @apply bg-paper text-body font-sans text-[14px] antialiased; }
   .td { @apply px-2.5 py-2.5 border-b border-line align-middle; }
 }
 
+/* Keyboard accessibility: a visible ring on every interactive element when
+   navigating by keyboard, without showing it on mouse clicks. */
+:focus-visible { outline: 2px solid #0E7C6B; outline-offset: 2px; border-radius: 6px; }
+button:focus-visible, a:focus-visible { outline-offset: 3px; }
+
 /* Print only the receipt or the patient-history sheet, nothing else. */
 @media print {
   body * { visibility: hidden; }
