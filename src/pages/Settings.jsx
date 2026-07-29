@@ -83,6 +83,8 @@ export default function Settings() {
         <b className="font-disp block mb-1">Prescription letterhead</b>
         <p className="text-[12px] text-body-3 mb-3">Printed at the top of every prescription. Registration numbers are a legal requirement on an Indian Rx.</p>
         <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2"><label className="lbl">Clinic logo URL (optional)</label>
+            <input className="inp" placeholder="https://…/logo.png" value={tenant.letterhead?.logoUrl || ''} onChange={(e) => setLetter('logoUrl', e.target.value)} /></div>
           <div className="col-span-2"><label className="lbl">Clinic address</label>
             <input className="inp" placeholder="12 Anna Salai" value={tenant.letterhead?.address || ''} onChange={(e) => setLetter('address', e.target.value)} /></div>
           <div><label className="lbl">Clinic phone</label>

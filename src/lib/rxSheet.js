@@ -78,9 +78,12 @@ export function buildRxHtml({ clinic = {}, doctor, patient, visit, consult, lang
   @media print{body{padding:14px 18px}}
 </style></head><body>
   <div class="head">
-    <div>
+    <div style="display:flex;gap:12px;align-items:flex-start">
+      ${clinic.logoUrl ? `<img src="${esc(clinic.logoUrl)}" alt="" style="height:46px;width:auto;object-fit:contain">` : ''}
+      <div>
       <div class="clinic">${esc(clinic.name || 'Clinic')}</div>
       <div class="muted">${esc(clinic.address || '')}${clinic.city ? `, ${esc(clinic.city)}` : ''}${clinic.phone ? `<br>Ph: ${esc(clinic.phone)}` : ''}${clinic.regNo ? `<br>Clinic Reg: ${esc(clinic.regNo)}` : ''}</div>
+      </div>
     </div>
     <div class="doc">
       <div style="font-weight:600">${esc(doctor?.name || '')}</div>
