@@ -142,3 +142,96 @@ export function whatsappRxLink({ clinic = {}, doctor, patient, visit, consult, m
   const to = digits.length === 10 ? `91${digits}` : ''
   return `https://wa.me/${to}?text=${encodeURIComponent(lines.join('\n'))}`
 }
+
+
+/* ---------------- PDF ----------------
+   Rendered by rasterising the same letterhead HTML used for printing, so the
+   PDF is pixel-identical to what the doctor signs — and, critically, Tamil and
+   Hindi dosage lines come out correct. (Generating text-native PDF via jsPDF
+   would need an embedded Unicode font per script; rasterising uses the fonts
+   the browser already has.) Both libraries are dynamically imported so they
+   never touch the main bundle. */
+
+const A4 = { w: 210, h: 297 }   // mm
+
+async function renderSheetToCanvas(payload) {
+  const [{ default: html2canvas }] = await Promise.all([import('html2canvas')])
+  const frame = document.createElement('iframe')
+  frame.setAttribute('aria-hidden', 'true')
+  frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:820px;height:1160px;border:0;'
+  document.body.appendChild(frame)
+  try {
+    const doc = frame.contentDocument
+    doc.open(); doc.write(buildRxHtml(payload)); doc.close()
+    // Give webfonts/logo a moment so they are captured, not missing.
+    if (doc.fonts?.ready) await doc.fonts.ready.catch(() => {})
+    await new Promise((r) => setTimeout(r, 250))
+    // Capture the CONTENT height, not the iframe's. A fixed frame height made
+    // a one-page Rx measure a hair over A4 and emit a blank second page.
+    const h = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight, 200)
+    frame.style.height = `${h}px`
+    return await html2canvas(doc.body, {
+      scale: 2, backgroundColor: '#FFFFFF', useCORS: true, logging: false,
+      height: h, windowHeight: h,
+    })
+  } finally {
+    document.body.removeChild(frame)
+  }
+}
+
+export async function makeRxPdfBlob(payload) {
+  const [{ jsPDF }, canvas] = await Promise.all([import('jspdf'), renderSheetToCanvas(payload)])
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
+  const imgH = (canvas.height * A4.w) / canvas.width
+  const img = canvas.toDataURL('image/jpeg', 0.92)
+  if (imgH <= A4.h + 1) {   // 1mm tolerance so rounding never adds a blank page
+    pdf.addImage(img, 'JPEG', 0, 0, A4.w, imgH)
+  } else {
+    // Long prescription: slice across pages rather than squashing it.
+    let left = imgH, page = 0
+    while (left > 0) {
+      if (page) pdf.addPage()
+      pdf.addImage(img, 'JPEG', 0, -page * A4.h, A4.w, imgH)
+      left -= A4.h; page++
+    }
+  }
+  return pdf.output('blob')
+}
+
+export const rxFileName = ({ patient, visit }) =>
+  `Rx-${(patient?.name || visit?.patientName || 'patient').replace(/[^\w]+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`
+
+export async function downloadRxPdf(payload) {
+  const blob = await makeRxPdfBlob(payload)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = rxFileName(payload)
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 4000)
+  return true
+}
+
+// Share the PDF itself. On phones (Android/iOS) the Web Share API hands the
+// real file to WhatsApp. Desktop browsers cannot attach a local file to a
+// wa.me link, so there we download the PDF and open the chat with the text
+// version — the doctor attaches the file, which is one tap and honest about
+// what the browser allows.
+export async function shareRxPdf(payload) {
+  const blob = await makeRxPdfBlob(payload)
+  const file = new File([blob], rxFileName(payload), { type: 'application/pdf' })
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: 'Prescription', text: `Prescription — ${payload.patient?.name || payload.visit?.patientName}` })
+      return { mode: 'shared' }
+    } catch (e) {
+      if (e?.name === 'AbortError') return { mode: 'cancelled' }
+    }
+  }
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = rxFileName(payload)
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 4000)
+  window.open(whatsappRxLink(payload), '_blank')
+  return { mode: 'downloaded' }
+}

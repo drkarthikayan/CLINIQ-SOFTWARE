@@ -10,7 +10,7 @@ import { watchStock, searchDrugs, qtyForRx } from '../services/stock.service'
 import { getPriceList } from '../services/billing.service'
 import { checkAllergy, flagVitals, bmiOf, validateConsult, detectDuplicates } from '../services/clinical.service'
 import { getTenantSettings } from '../services/settings.service'
-import { openRxPrint, whatsappRxLink } from '../lib/rxSheet'
+import { openRxPrint, downloadRxPdf, shareRxPdf } from '../lib/rxSheet'
 import { Chip, Modal } from '../components/ui'
 
 const EMPTY_VITALS = { bp: '', pulse: '', temp: '', spo2: '', weight: '', height: '' }
@@ -166,10 +166,24 @@ export default function Consultation() {
     patient, visit, consult, lang: settings?.letterhead?.rxLang || '',
   })
   const printRx = () => { if (!openRxPrint(rxPayload())) toast('Allow pop-ups to print the prescription') }
-  const shareRx = () => {
+  const savePdf = async () => {
+    if (busy) return
+    setBusy(true)
+    try { await downloadRxPdf(rxPayload()); toast('Prescription PDF saved') }
+    catch { toast('Could not generate the PDF') }
+    finally { setBusy(false) }
+  }
+  const shareRx = async () => {
     const mobile = patient?.mobile || visit.mobile
     if (!mobile) { toast('No mobile number on this patient record'); return }
-    window.open(whatsappRxLink({ ...rxPayload(), mobile }), '_blank')
+    if (busy) return
+    setBusy(true)
+    try {
+      const { mode } = await shareRxPdf({ ...rxPayload(), mobile })
+      if (mode === 'downloaded') toast('PDF downloaded · attach it in the WhatsApp chat that just opened')
+      else if (mode === 'shared') toast('Prescription shared')
+    } catch { toast('Could not share the prescription') }
+    finally { setBusy(false) }
   }
 
   // Run the clinical checks first; blockers stop, warnings need an explicit OK.
@@ -464,8 +478,9 @@ export default function Consultation() {
       <div className="flex justify-between items-center gap-2.5 mb-8 flex-wrap">
         <span className="text-[11.5px] text-body-3 font-mono">Ctrl+Enter complete · Ctrl+S draft · / drug search · Esc back</span>
         <div className="flex gap-2.5 flex-wrap">
-          <button className="btn" onClick={printRx}>🖨 Print Rx</button>
-          <button className="btn" onClick={shareRx}>WhatsApp</button>
+          <button className="btn" onClick={printRx}>🖨 Print</button>
+          <button className="btn" disabled={busy} onClick={savePdf}>PDF</button>
+          <button className="btn" disabled={busy} onClick={shareRx}>WhatsApp</button>
           <button className="btn" onClick={saveDraft}>Save draft</button>
           <button className="btn-pri" disabled={busy} onClick={attemptComplete}>Complete consult</button>
         </div>
