@@ -15,7 +15,7 @@ const TIMING = {
 }
 
 // Returns e.g. "காலை · இரவு · உணவுக்குப் பிறகு · 3 நாட்கள்" or '' when unknown.
-export function vernacularSig(freq, days, lang) {
+export function vernacularSig(freq, days, lang, food = '') {
   const t = TIMING[lang]
   if (!t) return ''
   const f = String(freq || '').toUpperCase()
@@ -30,9 +30,11 @@ export function vernacularSig(freq, days, lang) {
   else if (/\bTDS\b|\bTID\b/.test(f)) slots.push(t.morning, t.noon, t.night)
   else if (/\bHS\b/.test(f)) slots.push(t.night)
   if (!slots.length) return ''
-  const food = /AFTER/.test(f) ? t.afterFood : /BEFORE/.test(f) ? t.beforeFood : ''
+  const fd = String(food || '').toLowerCase()
+  const foodTxt = /after/.test(fd) || /AFTER/.test(f) ? t.afterFood
+    : /before|empty/.test(fd) || /BEFORE/.test(f) ? t.beforeFood : ''
   const parts = [slots.join(' · ')]
-  if (food) parts.push(food)
+  if (foodTxt) parts.push(foodTxt)
   if (days) parts.push(`${days} ${t.days}`)
   return parts.join(' · ')
 }
@@ -41,12 +43,15 @@ export function buildRxHtml({ clinic = {}, doctor, patient, visit, consult, lang
   const today = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
   const dx = consult.mode === 'soap' ? consult.a : consult.dx
   const rows = (consult.rx || []).map((r, i) => {
-    const vern = vernacularSig(r.freq, r.days, lang)
+    const vern = vernacularSig(r.freq, r.days, lang, r.food)
+    const generic = r.generic && r.generic !== r.drug ? `<div class="gen">${esc(r.generic)}</div>` : ''
+    const instr = r.instruction ? `<div class="instr">${esc(r.instruction)}</div>` : ''
     return `<tr>
       <td class="n">${i + 1}</td>
-      <td><b>${esc(r.drug)}</b>${vern ? `<div class="vern">${esc(vern)}</div>` : ''}</td>
+      <td><b>${esc(r.drug)}</b>${generic}${vern ? `<div class="vern">${esc(vern)}</div>` : ''}${instr}</td>
       <td>${esc(r.dose || '')}</td>
       <td>${esc(r.freq || '')}</td>
+      <td>${esc(r.food || '')}</td>
       <td class="c">${esc(r.days || '')}</td>
     </tr>`
   }).join('')
@@ -70,6 +75,8 @@ export function buildRxHtml({ clinic = {}, doctor, patient, visit, consult, lang
   td{padding:7px 6px;border-bottom:1px solid #F0EFEA;vertical-align:top}
   td.n,td.c{text-align:center;width:38px}
   .vern{font-size:11.5px;color:#0A5F52;margin-top:2px}
+  .gen{font-size:11px;color:#8B9699}
+  .instr{font-size:11px;color:#5C6B70;margin-top:2px;font-style:italic}
   .sec{margin-top:14px}
   .sec h4{margin:0 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8B9699}
   .sign{margin-top:46px;text-align:right}
@@ -100,8 +107,8 @@ export function buildRxHtml({ clinic = {}, doctor, patient, visit, consult, lang
   ${dx ? `<div class="sec"><h4>Diagnosis</h4><div>${esc(dx)}</div></div>` : ''}
 
   <div class="rx">℞</div>
-  <table><thead><tr><th></th><th>Medicine</th><th>Dose</th><th>Frequency</th><th>Days</th></tr></thead>
-  <tbody>${rows || '<tr><td colspan="5" class="muted">No medicines prescribed.</td></tr>'}</tbody></table>
+  <table><thead><tr><th></th><th>Medicine</th><th>Dose</th><th>Frequency</th><th>Food</th><th>Days</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="6" class="muted">No medicines prescribed.</td></tr>'}</tbody></table>
 
   ${labs.length ? `<div class="sec"><h4>Investigations</h4><div>${esc(labs.join(', '))}</div></div>` : ''}
   ${consult.advice ? `<div class="sec"><h4>Advice</h4><div>${esc(consult.advice)}</div></div>` : ''}
@@ -132,7 +139,10 @@ export function whatsappRxLink({ clinic = {}, doctor, patient, visit, consult, m
     `${patient?.name || visit.patientName} · ${new Date().toLocaleDateString('en-IN')}`,
     dx ? `\n*Diagnosis:* ${dx}` : '',
     (consult.rx || []).length ? '\n*Prescription:*' : '',
-    ...(consult.rx || []).map((r, i) => `${i + 1}. ${r.drug} — ${[r.dose, r.freq, r.days ? `${r.days} days` : ''].filter(Boolean).join(', ')}`),
+    ...(consult.rx || []).map((r, i) => {
+      const sig = [r.dose, r.freq, r.food, r.days ? `${r.days} days` : ''].filter(Boolean).join(', ')
+      return `${i + 1}. ${r.drug} — ${sig}${r.instruction ? `\n    (${r.instruction})` : ''}`
+    }),
     (consult.labs || []).length ? `\n*Tests:* ${consult.labs.join(', ')}` : '',
     consult.advice ? `\n*Advice:* ${consult.advice}` : '',
     consult.reviewDays ? `\n*Review after:* ${consult.reviewDays} days` : '',

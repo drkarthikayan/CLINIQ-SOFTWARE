@@ -40,7 +40,8 @@ tenants/{tenantId}
     consult: { mode ("quick"|"soap"), complaint, dx, advice,
                s, o, a, p,                        ← soap mode
                labs: [ ...codes ], labsCustom,
-               rx: [ { drug, dose, freq, days, batchId } ] }
+               rx: [ { drug (brand), generic, dose, freq, food, days,
+                       instruction, batchId, mrp } ] }
     createdAt (serverTimestamp)
 
   appointments/{apptId}
@@ -59,7 +60,10 @@ tenants/{tenantId}
     lines: [ { drug, need, dispensed, shortBy, batches: [ { batch, take } ] } ]
 
   pharmacy_stock/{batchId}        ← ONE DOC PER BATCH (FEFO needs batch granularity)
-    drug "Paracetamol 650 mg", batch "PB-1042", expiry (ISO string),
+    generic "Paracetamol 650 mg"  <- molecule + strength; drives allergy/class checks
+    brand   "Dolo 650"            <- shelf name; several brands share one generic
+    drug    "Dolo 650"            <- display name, kept for pre-brand records
+    batch "PB-1042", expiry (ISO string),
     qty (int), mrp, minStock (per-drug low-stock alert), purchasePrice,
     importedFrom ("excel"|"manual"|"starter")
 
