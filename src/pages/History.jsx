@@ -7,6 +7,8 @@ import {
   ageFrom, normalizeMobile,
 } from '../services/patients.service'
 import { flagVitals } from '../services/clinical.service'
+import { getTenantSettings } from '../services/settings.service'
+import { openRxPrint, downloadRxPdf, shareRxPdf } from '../lib/rxSheet'
 
 const toMillis = (t) => {
   if (!t) return 0
@@ -35,7 +37,11 @@ export default function History() {
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState('timeline')
   const [editing, setEditing] = useState(null)   // { kind: 'allergies'|'conditions', draft: [], input: '' }
+  const [settings, setSettings] = useState(null)
+  const [busyVisit, setBusyVisit] = useState(null)
   const [toastMsg, setToastMsg] = useState('')
+
+  useEffect(() => { getTenantSettings(user.tenantId).then(setSettings) }, [user.tenantId])
 
   const toast = (m) => { setToastMsg(m); setTimeout(() => setToastMsg(''), 3000) }
 
@@ -78,6 +84,38 @@ export default function History() {
     visits.forEach((v) => { const d = v.consult?.dx || v.consult?.a; if (d) m.set(d, (m.get(d) || 0) + 1) })
     return [...m.entries()].sort((a, b) => b[1] - a[1])
   }, [visits])
+
+  /* -------- reprint a past consultation --------
+     A completed visit leaves the queue, so the only place to re-issue its
+     prescription is here. Rebuild the same payload the consult screen used. */
+  const payloadFor = (v) => ({
+    clinic: { name: settings?.name || user.tenantName || user.tenantId, city: settings?.city, ...(settings?.letterhead || {}) },
+    doctor: { name: v.doctor || user.name, qualification: settings?.letterhead?.doctorQualification, regNo: settings?.letterhead?.doctorRegNo },
+    patient,
+    visit: { ...v, age: ageFrom(patient?.dob), sex: patient?.sex },
+    consult: v.consult || {},
+    lang: settings?.letterhead?.rxLang || '',
+    mobile: patient?.mobile,
+  })
+  const reprint = (v) => { if (!openRxPrint(payloadFor(v))) toast('Allow pop-ups to print') }
+  const rePdf = async (v) => {
+    if (busyVisit) return
+    setBusyVisit(v.id)
+    try { await downloadRxPdf(payloadFor(v)); toast('Prescription PDF saved') }
+    catch { toast('Could not generate the PDF') }
+    finally { setBusyVisit(null) }
+  }
+  const reShare = async (v) => {
+    if (busyVisit) return
+    if (!patient?.mobile) { toast('No mobile number on this patient record'); return }
+    setBusyVisit(v.id)
+    try {
+      const { mode } = await shareRxPdf(payloadFor(v))
+      if (mode === 'downloaded') toast('PDF downloaded · attach it in the WhatsApp chat that just opened')
+      else if (mode === 'shared') toast('Prescription shared')
+    } catch { toast('Could not share the prescription') }
+    finally { setBusyVisit(null) }
+  }
 
   /* -------- allergy / condition editing -------- */
   const openEdit = (kind) => setEditing({ kind, draft: [...(patient?.[kind] || [])], input: '' })
@@ -192,7 +230,16 @@ export default function History() {
                           <b className="font-mono text-[13px]">{dateStr(v.createdAt || v.completedAt)}</b>
                           <span className="text-[11.5px] text-body-3">{monthsAgo(v.createdAt || v.completedAt)}</span>
                         </div>
-                        <span className="text-[12px] text-body-3">{v.doctor}{v.token ? ` · ${v.token}` : ''}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[12px] text-body-3">{v.doctor}{v.token ? ` · ${v.token}` : ''}</span>
+                          {v.consult?.rx?.length > 0 && (
+                            <span className="flex gap-1 no-print">
+                              <button className="btn-ghost !text-[11.5px] !px-1.5 !py-0.5" onClick={() => reprint(v)}>Print</button>
+                              <button className="btn-ghost !text-[11.5px] !px-1.5 !py-0.5" disabled={busyVisit === v.id} onClick={() => rePdf(v)}>PDF</button>
+                              <button className="btn-ghost !text-[11.5px] !px-1.5 !py-0.5" disabled={busyVisit === v.id} onClick={() => reShare(v)}>WhatsApp</button>
+                            </span>
+                          )}
+                        </div>
                       </div>
                       {v.complaint && <div className="text-[13px] mb-1"><span className="text-body-3">Complaint: </span>{v.complaint}</div>}
                       {(c.dx || c.a) && <div className="text-[13px] mb-1"><span className="text-body-3">Diagnosis: </span><b>{c.dx || c.a}</b></div>}
