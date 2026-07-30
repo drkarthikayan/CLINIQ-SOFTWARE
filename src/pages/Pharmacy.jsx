@@ -9,7 +9,7 @@ import { watchPendingDispensary, watchDispensaryLog, dispenseRecord } from '../s
 import { watchWaste, addWaste, BMW_CATEGORIES } from '../services/waste.service'
 
 const rupee = (n) => '₹' + (n ?? 0).toLocaleString('en-IN')
-const EMPTY = { drug: '', batch: '', expiry: '', qty: '', mrp: '', minStock: '', purchasePrice: '' }
+const EMPTY = { brand: '', generic: '', batch: '', expiry: '', qty: '', mrp: '', minStock: '', purchasePrice: '' }
 const EMPTY_WASTE = { category: BMW_CATEGORIES[0], item: '', qty: '', unit: 'pcs', disposal: '', handledBy: '' }
 const TABS = [['stock', 'Stock register'], ['dispensary', 'Dispensary'], ['log', 'Dispensary log'], ['waste', 'Waste register']]
 
@@ -58,7 +58,10 @@ export default function Pharmacy() {
 
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase()
-    return stock.filter((r) => !t || r.drug?.toLowerCase().includes(t) || r.batch?.toLowerCase().includes(t))
+    return stock.filter((r) => !t
+      || (r.brand || r.drug)?.toLowerCase().includes(t)
+      || (r.generic || r.drug)?.toLowerCase().includes(t)
+      || r.batch?.toLowerCase().includes(t))
       .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
   }, [stock, q])
 
@@ -75,9 +78,9 @@ export default function Pharmacy() {
   const unitsToday = useMemo(() => log.reduce((s, r) => s + (r.lines || []).reduce((x, l) => x + (l.dispensed || 0), 0), 0), [log])
 
   const save = async () => {
-    if (!form.drug.trim() || !form.batch.trim() || !form.expiry) { toast('Drug, batch and expiry are required'); return }
-    await addStockItem(user.tenantId, form); setModal(false); setForm(EMPTY)
-    toast(`Added ${form.drug} · batch ${form.batch}`)
+    if (!form.generic.trim() || !form.batch.trim() || !form.expiry) { toast('Generic name, batch and expiry are required'); return }
+    await addStockItem(user.tenantId, { ...form, drug: form.brand || form.generic }); setModal(false); setForm(EMPTY)
+    toast(`Added ${form.brand || form.generic} · batch ${form.batch}`)
   }
 
   const onFile = async (e) => {
@@ -88,14 +91,16 @@ export default function Pharmacy() {
       const wb = XLSX.read(buf, { type: 'array', cellDates: true })
       const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
       const mapped = raw.map((row) => ({
-        drug: pickCol(row, ['medicine', 'drug', 'name', 'item']),
+        brand: pickCol(row, ['brand', 'brand name', 'medicine', 'drug', 'name', 'item']),
+        generic: pickCol(row, ['generic', 'generic name', 'molecule', 'composition', 'salt']),
+        drug: pickCol(row, ['brand', 'brand name', 'medicine', 'drug', 'name', 'item']),
         batch: pickCol(row, ['batch', 'batch no', 'batch number', 'batchno']),
         expiry: normalizeExpiry(pickCol(row, ['expiry', 'expiry date', 'exp', 'exp date'])),
         qty: pickCol(row, ['qty', 'quantity', 'stock']),
         mrp: pickCol(row, ['mrp', 'price']),
         purchasePrice: pickCol(row, ['purchase price', 'purchase', 'cost']),
-      })).filter((r) => r.drug)
-      if (!mapped.length) { toast('No rows found — expected: Medicine, Batch, Expiry, Qty, MRP, Purchase price'); return }
+      })).filter((r) => r.drug || r.generic)
+      if (!mapped.length) { toast('No rows found — expected: Brand/Medicine, Generic, Batch, Expiry, Qty, MRP, Purchase price'); return }
       const n = await importStockRows(user.tenantId, mapped)
       toast(`Imported ${n} batch${n === 1 ? '' : 'es'} from ${file.name}`)
     } catch { toast('Import failed — check the file format (.xlsx or .csv)') }
@@ -114,11 +119,11 @@ export default function Pharmacy() {
 
   // Restock hint: if the drug being added already exists, surface its batches.
   const existingForForm = useMemo(() => {
-    const name = form.drug.trim().toLowerCase()
+    const name = (form.brand || form.generic).trim().toLowerCase()
     if (!name) return null
-    const b = stock.filter((r) => r.drug?.trim().toLowerCase() === name)
+    const b = stock.filter((r) => (r.brand || r.drug)?.trim().toLowerCase() === name)
     return b.length ? { batches: b.length, total: b.reduce((s, r) => s + (r.qty ?? 0), 0) } : null
-  }, [form.drug, stock])
+  }, [form.brand, form.generic, stock])
 
   const expiredBatches = useMemo(() => stock.filter((r) => (r.qty ?? 0) > 0 && isExpired(r.expiry)), [stock])
   const logWaste = async () => {
@@ -156,7 +161,7 @@ export default function Pharmacy() {
             <Stat k="Expired" v={stats.expired} tone={stats.expired ? 'text-danger' : ''} />
           </div>
           <div className="card p-4 mb-4 flex gap-2.5 flex-wrap items-center">
-            <input className="inp !w-auto flex-1 min-w-[220px]" placeholder="Search drug or batch…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="inp !w-auto flex-1 min-w-[220px]" placeholder="Search brand, generic or batch…" value={q} onChange={(e) => setQ(e.target.value)} />
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onFile} />
             <button className="btn" onClick={() => fileRef.current?.click()}>⬆ Import Excel / CSV</button>
             <button className="btn-pri" onClick={() => setModal(true)}>+ Add stock</button>
@@ -176,7 +181,10 @@ export default function Pharmacy() {
                   const expired = isExpired(r.expiry); const near = !expired && isNearExpiry(r.expiry); const low = stockOf(r.drug) <= drugMinStock(stock, r.drug)
                   return (
                     <tr key={r.id} className="hover:bg-[#FBFAF7]">
-                      <td className="td"><b>{r.drug}</b></td>
+                      <td className="td">
+                        <b>{r.brand || r.drug}</b>
+                        {r.generic && r.generic !== (r.brand || r.drug) && <div className="text-[11.5px] text-body-3">{r.generic}</div>}
+                      </td>
                       <td className="td font-mono text-body-2">{r.batch}</td>
                       <td className="td font-mono text-body-2">{r.expiry}</td>
                       <td className="td text-right font-mono">{r.qty}</td>
@@ -336,9 +344,12 @@ export default function Pharmacy() {
           <button className="btn-pri" onClick={save}>Add batch</button>
         </>}>
         <div className="grid grid-cols-2 gap-3 mb-3">
-          <div className="col-span-2"><label className="lbl">Drug (with strength)</label>
-            <input className="inp" placeholder="Paracetamol 650 mg" value={form.drug} onChange={(e) => setForm((f) => ({ ...f, drug: e.target.value }))} />
-            {existingForForm && <p className="text-[12px] text-teal-dark mt-1">↻ Restock — already stocked: {existingForForm.batches} batch{existingForForm.batches === 1 ? '' : 'es'}, {existingForForm.total} in stock. This adds a new batch.</p>}</div>
+          <div><label className="lbl">Generic (molecule + strength)</label>
+            <input className="inp" placeholder="Paracetamol 650 mg" value={form.generic} onChange={(e) => setForm((f) => ({ ...f, generic: e.target.value }))} />
+            <p className="text-[11px] text-body-3 mt-1">Drives allergy and drug-class safety checks.</p></div>
+          <div><label className="lbl">Brand name</label>
+            <input className="inp" placeholder="Dolo 650" value={form.brand} onChange={(e) => setForm((f) => ({ ...f, brand: e.target.value }))} />
+            {existingForForm && <p className="text-[12px] text-teal-dark mt-1">↻ Restock — {existingForForm.batches} batch{existingForForm.batches === 1 ? '' : 'es'}, {existingForForm.total} in stock.</p>}</div>
           <div><label className="lbl">Batch no.</label><input className="inp font-mono" value={form.batch} onChange={(e) => setForm((f) => ({ ...f, batch: e.target.value }))} /></div>
           <div><label className="lbl">Expiry</label><input className="inp font-mono" type="date" value={form.expiry} onChange={(e) => setForm((f) => ({ ...f, expiry: e.target.value }))} /></div>
           <div><label className="lbl">Quantity</label><input className="inp font-mono" type="number" value={form.qty} onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))} /></div>
@@ -347,7 +358,7 @@ export default function Pharmacy() {
           <div className="col-span-2"><label className="lbl">Purchase price ₹ (optional)</label>
             <input className="inp font-mono" type="number" value={form.purchasePrice} onChange={(e) => setForm((f) => ({ ...f, purchasePrice: e.target.value }))} /></div>
         </div>
-        <p className="text-[12px] text-body-3">Excel import expects columns: <b>Medicine · Batch · Expiry · Qty · MRP · Purchase price</b>.</p>
+        <p className="text-[12px] text-body-3">Excel import expects columns: <b>Brand · Generic · Batch · Expiry · Qty · MRP · Purchase price</b> (Generic optional but recommended — it drives the safety checks).</p>
       </Modal>
 
       {toastMsg && <div className="fixed bottom-6 right-6 bg-ink text-white px-5 py-3 rounded-[10px] text-[13px] z-50 shadow-xl">{toastMsg}</div>}

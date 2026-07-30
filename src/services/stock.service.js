@@ -10,15 +10,22 @@ const NEAR_EXPIRY_DAYS = 90
 const LOW_STOCK_THRESHOLD = 10
 
 /* ---------------- demo store (mutable, so dispense + import reflect live) ---- */
+// `generic` is the molecule + strength (what the allergy/class checks use);
+// `brand` is what sits on the shelf. Several brands share one generic, which is
+// exactly what the prescriber needs to see. `drug` stays as the display name so
+// older records keep working.
 let demoStock = [
-  { id: 'b1', drug: 'Paracetamol 650 mg', batch: 'PB-1042', expiry: '2027-03-01', qty: 120, mrp: 2 },
-  { id: 'b2', drug: 'Paracetamol 650 mg', batch: 'PB-1039', expiry: '2026-09-15', qty: 8, mrp: 2 },
-  { id: 'b3', drug: 'Cetirizine 10 mg', batch: 'CT-221', expiry: '2027-01-10', qty: 60, mrp: 1.5 },
-  { id: 'b4', drug: 'Amoxicillin 500 mg', batch: 'AM-556', expiry: '2026-08-01', qty: 40, mrp: 6 },
-  { id: 'b5', drug: 'Azithromycin 500 mg', batch: 'AZ-118', expiry: '2026-11-20', qty: 15, mrp: 12 },
-  { id: 'b6', drug: 'Pantoprazole 40 mg', batch: 'PT-330', expiry: '2027-05-05', qty: 90, mrp: 3 },
-  { id: 'b7', drug: 'ORS sachet', batch: 'ORS-77', expiry: '2027-02-01', qty: 200, mrp: 20 },
-  { id: 'b8', drug: 'Ibuprofen 400 mg', batch: 'IB-902', expiry: '2026-07-01', qty: 4, mrp: 3 },
+  { id: 'b1', generic: 'Paracetamol 650 mg', brand: 'Dolo 650', drug: 'Dolo 650', batch: 'PB-1042', expiry: '2027-03-01', qty: 120, mrp: 2 },
+  { id: 'b2', generic: 'Paracetamol 650 mg', brand: 'Dolo 650', drug: 'Dolo 650', batch: 'PB-1039', expiry: '2026-09-15', qty: 8, mrp: 2 },
+  { id: 'b9', generic: 'Paracetamol 650 mg', brand: 'Calpol 650', drug: 'Calpol 650', batch: 'CP-220', expiry: '2027-06-10', qty: 45, mrp: 2.4 },
+  { id: 'b10', generic: 'Paracetamol 650 mg', brand: 'Crocin 650', drug: 'Crocin 650', batch: 'CR-771', expiry: '2027-04-02', qty: 30, mrp: 2.2 },
+  { id: 'b3', generic: 'Cetirizine 10 mg', brand: 'Cetzine 10', drug: 'Cetzine 10', batch: 'CT-221', expiry: '2027-01-10', qty: 60, mrp: 1.5 },
+  { id: 'b11', generic: 'Cetirizine 10 mg', brand: 'Alerid 10', drug: 'Alerid 10', batch: 'AL-118', expiry: '2027-02-18', qty: 25, mrp: 1.7 },
+  { id: 'b4', generic: 'Amoxicillin 500 mg', brand: 'Mox 500', drug: 'Mox 500', batch: 'AM-556', expiry: '2026-08-01', qty: 40, mrp: 6 },
+  { id: 'b5', generic: 'Azithromycin 500 mg', brand: 'Azithral 500', drug: 'Azithral 500', batch: 'AZ-118', expiry: '2026-11-20', qty: 15, mrp: 12 },
+  { id: 'b6', generic: 'Pantoprazole 40 mg', brand: 'Pantocid 40', drug: 'Pantocid 40', batch: 'PT-330', expiry: '2027-05-05', qty: 90, mrp: 3 },
+  { id: 'b7', generic: 'ORS sachet', brand: 'Electral', drug: 'Electral', batch: 'ORS-77', expiry: '2027-02-01', qty: 200, mrp: 20 },
+  { id: 'b8', generic: 'Ibuprofen 400 mg', brand: 'Brufen 400', drug: 'Brufen 400', batch: 'IB-902', expiry: '2026-07-01', qty: 4, mrp: 3 },
 ]
 let demoStockListeners = []
 const emitStock = () => demoStockListeners.forEach((cb) => cb([...demoStock]))
@@ -33,6 +40,11 @@ export function watchStock(tenantId, cb) {
   return onSnapshot(q, (snap) => cb(snap?.docs?.map((d) => ({ id: d.id, ...d.data() })) ?? []))
 }
 
+/* ---------------- brand / generic helpers ---------------- */
+// Rows written before brands existed only have `drug`; treat that as both.
+export const genericOf = (r) => r.generic || r.drug || ''
+export const brandOf = (r) => r.brand || r.drug || ''
+
 /* ---------------- flags ---------------- */
 export const daysToExpiry = (expiry) => (new Date(expiry) - new Date()) / 86400000
 export const isNearExpiry = (expiry) => daysToExpiry(expiry) <= NEAR_EXPIRY_DAYS
@@ -41,22 +53,46 @@ export const isExpired = (expiry) => daysToExpiry(expiry) < 0
 /* ---------------- search / FEFO pick ---------------- */
 export function pickFefoBatch(stockRows, drugName) {
   const batches = stockRows
-    .filter((r) => r.drug === drugName && (r.qty ?? 0) > 0)
+    .filter((r) => (brandOf(r) === drugName || r.drug === drugName) && (r.qty ?? 0) > 0)
     .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
   if (!batches.length) return null
   const first = batches[0]
   const totalQty = batches.reduce((s, b) => s + (b.qty ?? 0), 0)
   return {
-    drug: drugName, batchId: first.id, batch: first.batch, expiry: first.expiry, mrp: first.mrp,
+    drug: drugName, brand: brandOf(first), generic: genericOf(first),
+    batchId: first.id, batch: first.batch, expiry: first.expiry, mrp: first.mrp,
     totalQty, nearExpiry: isNearExpiry(first.expiry), lowStock: totalQty <= LOW_STOCK_THRESHOLD,
   }
 }
 
+// Search matches EITHER the generic (molecule) or any brand name, and returns
+// one entry per generic with every in-stock brand under it — so the prescriber
+// can see at a glance that the same molecule is available under other brands.
 export function searchDrugs(stockRows, text) {
   const t = (text || '').trim().toLowerCase()
   if (!t) return []
-  const names = [...new Set(stockRows.filter((r) => r.drug?.toLowerCase().includes(t)).map((r) => r.drug))]
-  return names.slice(0, 8).map((name) => pickFefoBatch(stockRows, name)).filter(Boolean)
+  const generics = new Map()
+  stockRows.forEach((r) => {
+    if ((r.qty ?? 0) <= 0) return
+    const g = genericOf(r), b = brandOf(r)
+    if (!g.toLowerCase().includes(t) && !b.toLowerCase().includes(t)) return
+    if (!generics.has(g)) generics.set(g, new Set())
+    generics.get(g).add(b)
+  })
+  return [...generics.entries()].slice(0, 8).map(([generic, brandSet]) => {
+    const brands = [...brandSet]
+      .map((b) => pickFefoBatch(stockRows, b))
+      .filter(Boolean)
+      .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
+    return { generic, brands, brandCount: brands.length }
+  }).filter((g) => g.brands.length)
+}
+
+// Every in-stock brand of a generic — used by the "other brands" switcher on an
+// Rx line that has already been added.
+export function brandsForGeneric(stockRows, generic) {
+  const names = [...new Set(stockRows.filter((r) => (r.qty ?? 0) > 0 && genericOf(r) === generic).map(brandOf))]
+  return names.map((b) => pickFefoBatch(stockRows, b)).filter(Boolean)
 }
 
 // Allergy list entries look like "Penicillin (rash, 2021)" — match on the
@@ -104,13 +140,13 @@ export function planDispense(stockRows, rxLines) {
   const remaining = new Map(stockRows.map((r) => [r.id, r.qty ?? 0]))
   for (const line of rxLines || []) {
     if (!line?.drug) continue
-    const stocked = stockRows.some((r) => r.drug === line.drug)
+    const stocked = stockRows.some((r) => brandOf(r) === line.drug || r.drug === line.drug)
     if (!stocked) continue
     const need = qtyForRx(line)
     let toTake = need
     let taken = 0
     const batches = stockRows
-      .filter((r) => r.drug === line.drug && (remaining.get(r.id) ?? 0) > 0)
+      .filter((r) => (brandOf(r) === line.drug || r.drug === line.drug) && (remaining.get(r.id) ?? 0) > 0)
       .sort((a, b) => new Date(a.expiry) - new Date(b.expiry))
     for (const b of batches) {
       if (toTake <= 0) break
@@ -140,8 +176,12 @@ export function _demoApplyDispense(allocations) {
 
 /* ---------------- stock receipt (manual add / Excel import) ---------------- */
 function normalizeStockItem(item) {
+  const generic = String(item.generic || item.drug || '').trim()
+  const brand = String(item.brand || item.drug || '').trim()
   return {
-    drug: String(item.drug || '').trim(),
+    generic, brand,
+    drug: brand || generic,   // display name kept for backward compatibility
+
     batch: String(item.batch || '').trim(),
     expiry: String(item.expiry || '').trim(),
     qty: Number(item.qty) || 0,

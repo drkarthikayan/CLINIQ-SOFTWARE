@@ -6,11 +6,12 @@ import {
   startConsult, saveConsultDraft, saveDoctorVitals, finalizeConsult,
   listTemplates, saveTemplate, bumpTemplateUse,
 } from '../services/visits.service'
-import { watchStock, searchDrugs, qtyForRx } from '../services/stock.service'
+import { watchStock, searchDrugs, qtyForRx, brandsForGeneric } from '../services/stock.service'
 import { getPriceList } from '../services/billing.service'
 import { checkAllergy, flagVitals, bmiOf, validateConsult, detectDuplicates } from '../services/clinical.service'
 import { getTenantSettings } from '../services/settings.service'
 import { openRxPrint, downloadRxPdf, shareRxPdf } from '../lib/rxSheet'
+import { FREQ_PRESETS, FOOD_PRESETS, defaultSigFor, suggestInstructions, suggestLineInstruction } from '../lib/rxPresets'
 import { Chip, Modal } from '../components/ui'
 
 const EMPTY_VITALS = { bp: '', pulse: '', temp: '', spo2: '', weight: '', height: '' }
@@ -58,6 +59,7 @@ export default function Consultation() {
   const [busy, setBusy] = useState(false)
   const [settings, setSettings] = useState(null)
   const [lastRx, setLastRx] = useState(null)   // most recent previous prescription
+  const [brandFor, setBrandFor] = useState(null)   // Rx row index whose brand list is open
 
   useEffect(() => watchTodayQueue(user.tenantId, setQueue), [user.tenantId])
   useEffect(() => watchStock(user.tenantId, setStock), [user.tenantId])
@@ -111,17 +113,39 @@ export default function Consultation() {
   }))
 
   const matchedDrugs = useMemo(() => searchDrugs(stock, rxSearch), [stock, rxSearch])
-  const stockOf = (drug) => stock.filter((r) => r.drug === drug).reduce((s2, r) => s2 + (r.qty ?? 0), 0)
+  const stockOf = (drug) => stock.filter((r) => (r.brand || r.drug) === drug).reduce((s2, r) => s2 + (r.qty ?? 0), 0)
 
   const addRxLine = (pick) => {
-    const hit = checkAllergy(allergies, pick.drug)
+    // The allergy guard runs against the GENERIC — a brand name like "Mox 500"
+    // would never match a "Penicillin" allergy on its own.
+    const hit = checkAllergy(allergies, pick.generic || pick.drug)
     if (hit?.level === 'block') { toast(`⛔ Blocked — ${hit.reason}`); return }
     if (hit?.level === 'caution') toast(`⚠ Caution — ${hit.reason}`)
+    const sig = defaultSigFor(pick.generic || pick.drug)
     setConsult((c) => ({
       ...c,
-      rx: [...c.rx, { drug: pick.drug, dose: '1 tab', freq: '', days: 3, batchId: pick.batchId, mrp: pick.mrp, nearExpiry: pick.nearExpiry, lowStock: pick.lowStock }],
+      rx: [...c.rx, {
+        drug: pick.brand || pick.drug, generic: pick.generic || pick.drug,
+        dose: '1 tab', freq: sig.freq, food: sig.food, days: 3,
+        instruction: suggestLineInstruction(pick.generic || pick.drug),
+        batchId: pick.batchId, mrp: pick.mrp, nearExpiry: pick.nearExpiry, lowStock: pick.lowStock,
+      }],
     }))
     setRxSearch('')
+  }
+
+  // Swap an Rx line to another brand of the same molecule, keeping the sig.
+  const switchBrand = (i, alt) => {
+    updateRxLine(i, { drug: alt.brand || alt.drug, batchId: alt.batchId, mrp: alt.mrp, nearExpiry: alt.nearExpiry, lowStock: alt.lowStock })
+    setBrandFor(null)
+    toast(`Switched to ${alt.brand || alt.drug}`)
+  }
+
+  const applySuggestedAdvice = () => {
+    const picks = suggestInstructions({ dx: consult.mode === 'soap' ? consult.a : consult.dx, rx: consult.rx })
+    const text = picks.map((p) => p.text).join(' ')
+    setConsult((c) => ({ ...c, advice: c.advice ? `${c.advice} ${text}` : text }))
+    toast('Suggested instructions added — edit as needed')
   }
   const updateRxLine = (i, patch) => setConsult((c) => ({ ...c, rx: c.rx.map((r, idx) => (idx === i ? { ...r, ...patch } : r)) }))
   const removeRxLine = (i) => setConsult((c) => ({ ...c, rx: c.rx.filter((_, idx) => idx !== i) }))
@@ -304,15 +328,6 @@ export default function Consultation() {
             <span className="text-[11.5px] text-body-3">{typeof age === 'number' && age < 12 ? 'Paediatric — BP/pulse flags off' : 'Adult reference ranges'}</span>
           </div>
         </div>
-        {visit.vitals?.bp && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3">
-            <VField label="BP (nurse)" value={visit.vitals?.bp} readOnly />
-            <VField label="Pulse (nurse)" value={visit.vitals?.pulse} readOnly />
-            <VField label="Temp (nurse)" value={visit.vitals?.temp} readOnly />
-            <VField label="SpO₂ (nurse)" value={visit.vitals?.spo2} readOnly />
-            <VField label="Weight (nurse)" value={visit.vitals?.weight} readOnly />
-          </div>
-        )}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5">
           <VField label="BP" value={vitalsDraft.bp} flag={vFlags.bp} onChange={(v) => setVitalsDraft((s) => ({ ...s, bp: v }))} placeholder="120/80" />
           <VField label="Pulse" value={vitalsDraft.pulse} flag={vFlags.pulse} onChange={(v) => setVitalsDraft((s) => ({ ...s, pulse: v }))} placeholder="76" />
@@ -348,7 +363,13 @@ export default function Consultation() {
           <div className="grid gap-2.5">
             <div><span className="lbl">Complaint</span><textarea className="inp !h-16" value={consult.complaint} onChange={(e) => setConsult((c) => ({ ...c, complaint: e.target.value }))} /></div>
             <div><span className="lbl">Diagnosis</span><input className="inp" value={consult.dx} onChange={(e) => setConsult((c) => ({ ...c, dx: e.target.value }))} /></div>
-            <div><span className="lbl">Advice</span><textarea className="inp !h-16" value={consult.advice} onChange={(e) => setConsult((c) => ({ ...c, advice: e.target.value }))} /></div>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="lbl">Advice & instructions</span>
+                <button className="btn-ghost !text-[11.5px] !py-0.5" onClick={applySuggestedAdvice}>✎ Suggest for this case</button>
+              </div>
+              <textarea className="inp !h-20" value={consult.advice} onChange={(e) => setConsult((c) => ({ ...c, advice: e.target.value }))} />
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
@@ -399,23 +420,35 @@ export default function Consultation() {
         <div className="relative mb-3">
           <input id="rx-search" className="inp" placeholder="Search drug to add…  ( / )" value={rxSearch} onChange={(e) => setRxSearch(e.target.value)} />
           {matchedDrugs.length > 0 && (
-            <div className="absolute z-10 mt-1 w-full bg-white border border-line-strong rounded-lg shadow-lg overflow-hidden">
-              {matchedDrugs.map((m) => {
-                const hit = checkAllergy(allergies, m.drug)
+            <div className="absolute z-20 mt-1 w-full bg-white border border-line-strong rounded-lg shadow-lg overflow-hidden max-h-[340px] overflow-y-auto">
+              {matchedDrugs.map((g) => {
+                const hit = checkAllergy(allergies, g.generic)
                 const blocked = hit?.level === 'block'
                 return (
-                  <button key={m.drug} disabled={blocked}
-                    className={`w-full text-left px-3 py-2 text-[13px] flex items-center justify-between gap-2 ${blocked ? 'bg-danger-wash text-danger cursor-not-allowed' : 'hover:bg-[#FBFAF7]'}`}
-                    onClick={() => addRxLine(m)}>
-                    <span>{m.drug}</span>
-                    <span className="flex gap-1.5 items-center shrink-0">
-                      {blocked && <Chip tone="red">⛔ Allergy</Chip>}
-                      {hit?.level === 'caution' && <Chip tone="amber">⚠ Cross-reactive</Chip>}
-                      {m.nearExpiry && <Chip tone="amber">Batch exp {m.expiry}</Chip>}
-                      {m.lowStock && <Chip tone="red">Low stock</Chip>}
-                      <span className="font-mono text-[11.5px] text-body-3">qty {m.totalQty}</span>
-                    </span>
-                  </button>
+                  <div key={g.generic} className={`border-b border-line last:border-0 ${blocked ? 'bg-danger-wash' : ''}`}>
+                    <div className="flex items-center justify-between gap-2 px-3 pt-2 pb-1">
+                      <span className="text-[12px] font-medium text-body-2">
+                        {g.generic}<span className="text-body-3 font-normal"> · generic</span>
+                      </span>
+                      <span className="flex gap-1.5 items-center">
+                        {blocked && <Chip tone="red">⛔ {hit.reason}</Chip>}
+                        {hit?.level === 'caution' && <Chip tone="amber">⚠ cross-reactive</Chip>}
+                        {!blocked && g.brandCount > 1 && <Chip tone="teal">{g.brandCount} brands in stock</Chip>}
+                      </span>
+                    </div>
+                    {g.brands.map((b) => (
+                      <button key={b.brand} disabled={blocked}
+                        className={`w-full text-left pl-5 pr-3 py-1.5 text-[13px] flex items-center justify-between gap-2 ${blocked ? 'text-danger cursor-not-allowed' : 'hover:bg-[#FBFAF7]'}`}
+                        onClick={() => addRxLine(b)}>
+                        <span><b>{b.brand}</b></span>
+                        <span className="flex gap-1.5 items-center shrink-0">
+                          {b.nearExpiry && <Chip tone="amber">exp {b.expiry}</Chip>}
+                          {b.lowStock && <Chip tone="red">low</Chip>}
+                          <span className="font-mono text-[11.5px] text-body-3">₹{b.mrp} · qty {b.totalQty}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 )
               })}
             </div>
@@ -424,30 +457,61 @@ export default function Consultation() {
         <div className="overflow-x-auto">
           <table className="w-full text-[13px] border-collapse min-w-[640px]">
             <thead><tr>
-              <th className="th">Drug</th><th className="th w-28">Dose</th><th className="th w-36">Frequency</th>
-              <th className="th w-16">Days</th><th className="th w-20 text-right">Qty</th><th className="th w-16"></th>
+              <th className="th">Medicine</th><th className="th w-24">Dose</th>
+              <th className="th w-36">Frequency</th><th className="th w-32">Food</th>
+              <th className="th w-16">Days</th><th className="th w-20 text-right">Qty</th><th className="th w-12"></th>
             </tr></thead>
             <tbody>
               {consult.rx.map((r, i) => {
-                const hit = checkAllergy(allergies, r.drug)
+                const hit = checkAllergy(allergies, r.generic || r.drug)
                 const dup = dupes.find((d) => d.index === i)
                 const qty = qtyForRx(r)
+                const alts = r.generic ? brandsForGeneric(stock, r.generic).filter((b) => b.brand !== r.drug) : []
                 return (
                   <tr key={i} className={hit?.level === 'block' ? 'bg-danger-wash' : ''}>
-                    <td className="td">
-                      <div>{r.drug}</div>
+                    <td className="td align-top">
+                      <div className="font-medium">{r.drug}</div>
+                      {r.generic && r.generic !== r.drug && <div className="text-[11.5px] text-body-3">{r.generic}</div>}
                       <div className="flex gap-1.5 flex-wrap mt-1">
                         {hit?.level === 'block' && <Chip tone="red">⛔ {hit.reason}</Chip>}
                         {hit?.level === 'caution' && <Chip tone="amber">⚠ {hit.reason}</Chip>}
                         {dup && <Chip tone="amber">⚠ {dup.reason}</Chip>}
                         {r.nearExpiry && <Chip tone="amber">near-expiry batch</Chip>}
                         {r.lowStock && <Chip tone="red">low stock</Chip>}
+                        {alts.length > 0 && (
+                          <button className="chip-teal hover:opacity-80" onClick={() => setBrandFor(brandFor === i ? null : i)}>
+                            ⇄ {alts.length} other brand{alts.length > 1 ? 's' : ''}
+                          </button>
+                        )}
                       </div>
+                      {brandFor === i && alts.length > 0 && (
+                        <div className="mt-1.5 border border-line rounded-lg overflow-hidden bg-white">
+                          {alts.map((a) => (
+                            <button key={a.brand} className="w-full text-left px-2.5 py-1.5 text-[12.5px] hover:bg-[#FBFAF7] flex justify-between gap-2"
+                              onClick={() => switchBrand(i, a)}>
+                              <span>{a.brand}</span>
+                              <span className="font-mono text-[11.5px] text-body-3">₹{a.mrp} · qty {a.totalQty}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <input className="inp !py-1 !text-[12px] mt-1.5" placeholder="Instruction for the patient (optional)"
+                        value={r.instruction || ''} onChange={(e) => updateRxLine(i, { instruction: e.target.value })} />
                     </td>
-                    <td className="td"><input className="inp !py-1" placeholder="1 tab" value={r.dose} onChange={(e) => updateRxLine(i, { dose: e.target.value })} /></td>
-                    <td className="td"><input className="inp !py-1" placeholder="TDS after food" value={r.freq} onChange={(e) => updateRxLine(i, { freq: e.target.value })} /></td>
-                    <td className="td"><input className="inp !py-1" type="number" value={r.days} onChange={(e) => updateRxLine(i, { days: Number(e.target.value) })} /></td>
-                    <td className="td text-right">
+                    <td className="td align-top"><input className="inp !py-1" placeholder="1 tab" value={r.dose} onChange={(e) => updateRxLine(i, { dose: e.target.value })} /></td>
+                    <td className="td align-top">
+                      <select className="inp !py-1" value={r.freq || ''} onChange={(e) => updateRxLine(i, { freq: e.target.value })}>
+                        <option value="">Select…</option>
+                        {FREQ_PRESETS.map((f) => <option key={f.code} value={f.code}>{f.label}</option>)}
+                      </select>
+                    </td>
+                    <td className="td align-top">
+                      <select className="inp !py-1" value={r.food ?? ''} onChange={(e) => updateRxLine(i, { food: e.target.value })}>
+                        {FOOD_PRESETS.map((f) => <option key={f.label} value={f.code}>{f.label}</option>)}
+                      </select>
+                    </td>
+                    <td className="td align-top"><input className="inp !py-1" type="number" value={r.days} onChange={(e) => updateRxLine(i, { days: Number(e.target.value) })} /></td>
+                    <td className="td align-top text-right">
                       <div className="font-mono font-semibold">{qty || '—'}</div>
                       {qty > 0 && r.batchId && (() => {
                         const have = stockOf(r.drug)
@@ -459,11 +523,11 @@ export default function Consultation() {
                         )
                       })()}
                     </td>
-                    <td className="td"><button className="btn-ghost !text-[12px]" onClick={() => removeRxLine(i)}>✕</button></td>
+                    <td className="td align-top"><button className="btn-ghost !text-[12px]" onClick={() => removeRxLine(i)}>✕</button></td>
                   </tr>
                 )
               })}
-              {consult.rx.length === 0 && <tr><td className="td text-body-3" colSpan={6}>No drugs added yet.</td></tr>}
+              {consult.rx.length === 0 && <tr><td className="td text-body-3" colSpan={7}>No drugs added yet.</td></tr>}
             </tbody>
           </table>
         </div>
