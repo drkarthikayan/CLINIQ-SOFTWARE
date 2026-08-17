@@ -79,21 +79,33 @@ Session 18 introduced. Fixed by upgrading to **jspdf 4.2.1**; `addImage` /
 (valid single-page file, no console errors). `npm audit fix` cleared the
 remaining high advisories (brace-expansion, nanoid, react-router, postcss).
 
-### Known remaining: `xlsx` (high, no npm fix)
+### Known remaining: `xlsx` (high, accepted risk)
 
 The npm-published `xlsx` is 0.18.5 and is no longer updated - SheetJS ships
-patched builds from their own CDN instead. Exposure here is limited: the only
-parse path is the pharmacy stock import, i.e. a file a staff member chooses,
-not attacker-supplied input.
+patched builds only from `cdn.sheetjs.com`.
 
-To take the patched build (run where cdn.sheetjs.com is reachable - it is
-blocked from the agent sandbox, so it could not be verified there):
+**Do NOT try to install the CDN tarball.** It fails in both environments we
+build in:
+
+- the agent sandbox blocks the host (`403`), and
+- Cloud Shell's npm refuses remote tarballs entirely
+  (`EALLOWREMOTE - Fetching packages of type "remote" have been disabled`).
+
+Attempting it uninstalls `xlsx` first, so the build then dies with
+`Rollup failed to resolve import "xlsx"` and the next `firebase deploy` silently
+re-ships the previous `dist/`. If that has already happened:
 
 ```bash
-npm uninstall xlsx
-npm install https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
-npm run build      # confirm the Pharmacy Excel import still parses a sheet
+git checkout -- package.json package-lock.json
+git pull && npm install && npm run build
 ```
 
-Do **not** run `npm audit fix --force` - it moves dependencies across majors
-and can break a working build.
+**Accepted risk.** We stay on `xlsx@0.18.5`. The advisories (prototype
+pollution, ReDoS) require parsing a hostile spreadsheet; the only parse path in
+CLINIQ is the pharmacy stock import, i.e. a file a staff member deliberately
+chooses. Revisit if SheetJS resumes publishing to npm, or if importing
+third-party sheets ever becomes routine - the alternative is a CSV-only import,
+which drops `.xlsx` support.
+
+Do **not** run `npm audit fix --force` - it moves dependencies across majors and
+can break a working build.
