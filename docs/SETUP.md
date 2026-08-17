@@ -69,3 +69,31 @@ CLINIQ keeps working when the connection drops - the normal case in Tier-2/3 tow
 
 **Bumping the shell cache:** change `CACHE = 'cliniq-shell-v1'` in `public/sw.js`
 when the shell files themselves change, so old caches are dropped on activate.
+
+
+## Dependency security (Session 20)
+
+`npm audit` after the PDF work flagged a **critical** in `jspdf@2.5.2`, which
+Session 18 introduced. Fixed by upgrading to **jspdf 4.2.1**; `addImage` /
+`addPage` / `output('blob')` are unchanged, and PDF output was re-verified
+(valid single-page file, no console errors). `npm audit fix` cleared the
+remaining high advisories (brace-expansion, nanoid, react-router, postcss).
+
+### Known remaining: `xlsx` (high, no npm fix)
+
+The npm-published `xlsx` is 0.18.5 and is no longer updated - SheetJS ships
+patched builds from their own CDN instead. Exposure here is limited: the only
+parse path is the pharmacy stock import, i.e. a file a staff member chooses,
+not attacker-supplied input.
+
+To take the patched build (run where cdn.sheetjs.com is reachable - it is
+blocked from the agent sandbox, so it could not be verified there):
+
+```bash
+npm uninstall xlsx
+npm install https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
+npm run build      # confirm the Pharmacy Excel import still parses a sheet
+```
+
+Do **not** run `npm audit fix --force` - it moves dependencies across majors
+and can break a working build.
